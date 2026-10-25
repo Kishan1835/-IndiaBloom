@@ -282,6 +282,20 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
     for failure in report.failed:
         print(f"  failed {failure.ticker}: {failure.reason}", file=sys.stderr)
     print(f"cache: {FUNDAMENTALS_DIR}  (rerun to retry failures; cached stocks are skipped)")
+    from indiabloom.fundamentals import load_snapshot
+    from indiabloom.holdings import HoldingPoint, append_holdings
+
+    points = []
+    for ticker in tickers:
+        snap = load_snapshot(ticker, FUNDAMENTALS_DIR)
+        if snap is None or (snap.get("insider_pct") is None and snap.get("institution_pct") is None):
+            continue
+        points.append(HoldingPoint(
+            date=snap["fetched_at"][:10], ticker=ticker,
+            insider_pct=None if snap.get("insider_pct") is None else snap["insider_pct"] * 100,
+            institution_pct=None if snap.get("institution_pct") is None else snap["institution_pct"] * 100,
+        ))
+    print(f"shareholding history: {append_holdings(points)} new points (see: python -m indiabloom holders TICKER)")
     print("Source: yfinance (unofficial). Ratios are as reported by Yahoo Finance.")
     _disclaimer()
     return EXIT_OK if not report.failed else EXIT_DATA
@@ -407,6 +421,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch = al_sub.add_parser("watch", help="check repeatedly while this terminal stays open")
     p_watch.add_argument("--every", type=float, default=15, help="minutes between checks")
     p_watch.add_argument("--refresh", action="store_true", help="also fetch today's NSE deals each time")
+    p_ev = sub.add_parser("events", help="fetch results and ex-dividend dates for an index (cached)")
+    p_ev.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_ev.add_argument("--sleep", type=float, default=0.5, help="seconds between requests")
+    p_ev.add_argument("--refresh", action="store_true", help="refetch even if the cache is fresh")
+    p_cal = sub.add_parser("calendar", help="upcoming results and ex-dividend dates from the cache")
+    p_cal.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_cal.add_argument("--days", type=int, default=30, help="look-ahead window in days")
+    p_cal.add_argument("--watch", action="store_true", help="only stocks on your watchlist")
+    p_hold = sub.add_parser("holders", help="insider and institution percentage history for a stock")
+    p_hold.add_argument("ticker", help="e.g. INFY.NS")
     return parser
 
 
@@ -441,6 +465,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_screen(args)
         if args.command == "alerts":
             return cmd_alerts(args)
+        if args.command == "events":
+            return cmd_events(args)
+        if args.command == "calendar":
+            return cmd_calendar(args)
+        if args.command == "holders":
+            return cmd_holders(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -720,4 +750,89 @@ def cmd_alerts(args: argparse.Namespace) -> int:
     rule = Rule(id=next_id, ticker=ticker, kind=kind, threshold=threshold, seen=seen[-200:])
     save_rules([*rules, rule], next_id + 1)
     print(f"added rule {rule.id}: {ticker} {describe(rule)}")
+    return EXIT_OK
+
+
+def cmd_events(args: argparse.Namespace) -> int:
+    from indiabloom.events import EVENTS_DIR, run_events
+    from indiabloom.universe import UniverseError, load_index
+
+    try:
+        constituents = load_index(args.index)
+    except UniverseError as exc:
+        print(f"universe error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    tickers = [c.ticker for c in constituents]
+
+    def progress(done: int, total: int, ticker: str) -> None:
+        print(f"[{done}/{total}] {ticker}", flush=True)
+
+    fetched, skipped, failures = run_events(tickers, EVENTS_DIR, sleep_s=args.sleep,
+                                            refresh=args.refresh, progress=progress)
+    print(f"events: fetched {fetched}, already fresh {skipped}, failed {len(failures)} of {len(tickers)}")
+    for failure in failures:
+        print(f"  failed {failure.ticker}: {failure.reason}", file=sys.stderr)
+    print(f"cache: {EVENTS_DIR}  (results and ex-dividend dates; refreshed after a day)")
+    _disclaimer()
+    return EXIT_OK
+
+
+def cmd_calendar(args: argparse.Namespace) -> int:
+    from datetime import date
+
+    from indiabloom.events import EVENTS_DIR, load_events, upcoming
+    from indiabloom.universe import UniverseError, load_index
+    from indiabloom.watchlist import load_watchlist
+
+    if args.watch:
+        tickers = [p.ticker for p in load_watchlist()]
+        if not tickers:
+            print("watchlist is empty; add stocks with: python -m indiabloom watchlist add INFY.NS")
+            return EXIT_OK
+    else:
+        try:
+            tickers = [c.ticker for c in load_index(args.index)]
+        except UniverseError as exc:
+            print(f"universe error: {exc}", file=sys.stderr)
+            return EXIT_DATA
+    cached = [e for e in (load_events(t, EVENTS_DIR) for t in tickers) if e is not None]
+    rows = upcoming(cached, date.today(), args.days)
+    if rows:
+        _print_table(["DATE", "TICKER", "EVENT"], [[d.isoformat(), t, what] for d, t, what in rows])
+    else:
+        print(f"no results or ex-dividend dates in the next {args.days} days among {len(cached)} cached stocks")
+    missing = len(tickers) - len(cached)
+    if missing:
+        print(f"{missing} stocks have no events cache yet; run: python -m indiabloom events --index {args.index}")
+    _disclaimer()
+    return EXIT_OK
+
+
+def cmd_holders(args: argparse.Namespace) -> int:
+    from indiabloom.holdings import change, load_holdings
+
+    ticker = args.ticker.upper()
+    points = load_holdings()
+    pair = change(points, ticker)
+    own = [p for p in points if p.ticker == ticker]
+    if not own:
+        print(f"no shareholding history for {ticker}. Run: python -m indiabloom fundamentals")
+        return EXIT_OK
+
+    def pct(value: float | None) -> str:
+        return "-" if value is None else f"{value:.2f}%"
+
+    _print_table(["DATE", "INSIDERS", "INSTITUTIONS"],
+                 [[p.date, pct(p.insider_pct), pct(p.institution_pct)] for p in sorted(own, key=lambda p: p.date)])
+    if pair is None:
+        print("\nOne data point so far. Changes appear after the next fundamentals refresh.")
+    else:
+        first, last = pair
+        d_ins = None if first.insider_pct is None or last.insider_pct is None else last.insider_pct - first.insider_pct
+        d_inst = None if first.institution_pct is None or last.institution_pct is None \
+            else last.institution_pct - first.institution_pct
+        print(f"\n{first.date} to {last.date}: insiders {('-' if d_ins is None else f'{d_ins:+.2f} pts')}, "
+              f"institutions {('-' if d_inst is None else f'{d_inst:+.2f} pts')}")
+    print("Aggregate percentages from yfinance. They do not name the holders.")
+    _disclaimer()
     return EXIT_OK

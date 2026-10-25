@@ -14,6 +14,7 @@ Keys
   x screen the index on fundamentals (e.g. pe_trailing<20, roe>=15); Enter on a result opens it
   m top movers (largest day gainers and losers)
   h price chart with 1M, 6M and 1Y ranges (text chart from daily closes)
+  k events for the selected stock: next results, ex-dividend, past results, dividends (cached)
   o compare up to 6 stocks on one chart, rebased to 100 (e.g. INFY.NS, TCS.NS, MU)
   ctrl+p command palette: pick any view or action by name
   e export the table on the right to CSV; ctrl+e exports the stock list (Watch tab: watchlist with P&L)
@@ -77,9 +78,10 @@ VIEW_LABELS = {
     "position": "Position",
     "movers": "Movers",
     "chart": "Chart",
+    "events": "Events",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
-             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart"}
+             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart", "k": "events"}
 LIST_VIEWS = ("screen", "movers", "compare")  # right pane shows a list or chart, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
@@ -212,7 +214,7 @@ class IndiaBloomApp(App):
                             id="compare-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -623,6 +625,9 @@ class IndiaBloomApp(App):
         if self.view == "fundamentals":
             self._show_fundamentals(ticker)  # reads the local cache only; no network
             return
+        if self.view == "events":
+            self._show_events(ticker)  # reads the local events cache only
+            return
         if self.view == "deals":
             self._show_deals(ticker)  # reads the local deals history only
             return
@@ -701,6 +706,34 @@ class IndiaBloomApp(App):
             table.add_row(metric, value)
         hint.update("Set buy price and quantity: python -m indiabloom watchlist add "
                     f"{ticker} --buy PRICE --qty N")
+
+    def _show_events(self, ticker: str) -> None:
+        from indiabloom.events import load_events
+
+        events = load_events(ticker)
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("EVENT", key="event")
+        table.add_column("DETAIL", key="detail")
+        hint = self.query_one("#hint", Static)
+        if events is None:
+            hint.update(f"No events cached for {ticker}. Run: python -m indiabloom events")
+            return
+
+        def num(value: object, digits: int = 2) -> str:
+            return "-" if value is None else f"{value:,.{digits}f}"
+
+        table.add_row("Next results", events["next_results"] or "-")
+        table.add_row("Ex-dividend", events["ex_dividend"] or "-")
+        for r in events["past_results"]:
+            table.add_row(f"Results {r['date']}",
+                          f"EPS {num(r['reported_eps'])} vs estimate {num(r['eps_estimate'])}"
+                          f" (surprise {num(r['surprise_pct'], 1)}%)")
+        for d in events["dividends"]:
+            table.add_row(f"Dividend {d['date']}", f"Rs {num(d['amount'])} per share")
+        for s in events["splits"]:
+            table.add_row(f"Split {s['date']}", f"ratio {num(s['ratio'], 0)}")
+        hint.update(f"Source: yfinance, fetched {events['fetched_at']}. Dates can move; check the company's notice.")
 
     def _show_deals(self, ticker: str) -> None:
         table = self.query_one("#links", DataTable)

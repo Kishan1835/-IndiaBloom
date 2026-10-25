@@ -29,3 +29,5 @@ data/watchlist.json
 data/exports/
 data/alerts.json
 data/alerts/
+data/events/
+data/holdings.csv
