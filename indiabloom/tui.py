@@ -9,6 +9,11 @@ Right pane: one view at a time.
 Keys
   1 All   2 IT   3 Banks   4 Manufacturing   5 Pharma   6 US
   c competitors   s suppliers   u customers   r correlation   n news   f fundamentals   d deals   q quit
+  ctrl+f search a stock by ticker or company name (Enter jumps to it, Esc closes)
+  7 Watch (your watchlist)   a add or remove the selected stock from the watchlist   p position (P&L)
+  x screen the index on fundamentals (e.g. pe_trailing<20, roe>=15); Enter on a result opens it
+  m top movers (largest day gainers and losers)
+  ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
 the price download, and the result (with the date of the latest prices).
@@ -17,10 +22,13 @@ Slow data loads in background threads, so the screen stays responsive.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
 from indiabloom.companies import find_mentions
 from indiabloom.deals import deals_for, load_history as load_deals
@@ -35,7 +43,18 @@ from indiabloom.stock_list import (
     StockRow,
     build_stock_list,
     filter_group,
+    find_stock,
     latest_us_t,
+    top_movers,
+)
+from indiabloom.watchlist import (
+    WATCHLIST_FILE,
+    add_position,
+    find_position,
+    load_watchlist,
+    position_rows,
+    remove_position,
+    save_watchlist,
 )
 
 GRAPH_VIEWS = ("competitors", "suppliers", "customers")
@@ -48,9 +67,12 @@ VIEW_LABELS = {
     "news": "News",
     "fundamentals": "Fundamentals",
     "deals": "Deals",
+    "position": "Position",
+    "movers": "Movers",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
-             "f": "fundamentals", "d": "deals"}
+             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers"}
+LIST_VIEWS = ("screen", "movers")  # right pane shows a list of stocks, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
 )
@@ -63,13 +85,41 @@ TABS = {
     "mfg": ("Mfg", "Manufacturing"),
     "pharma": ("Pharma", "Pharma"),
     "us": ("US", "US"),
+    "watch": ("Watch", None),  # filtered by the watchlist, not by sector
 }
-TAB_NUMBER_KEYS = {"1": "all", "2": "it", "3": "banks", "4": "mfg", "5": "pharma", "6": "us"}
+TAB_NUMBER_KEYS = {"1": "all", "2": "it", "3": "banks", "4": "mfg", "5": "pharma", "6": "us", "7": "watch"}
 EMPTY_HINT = (
     "Nothing recorded under {view} for {ticker}. Add links to data/relations.json "
     "(supplier links are directed: source supplies target)."
 )
 INDEX_NAME = "nifty500"
+
+
+class HelpScreen(ModalScreen):
+    """Full key list, generated from the app's bindings so it always matches what the keys do."""
+
+    BINDINGS = [("escape", "dismiss", "Close"), ("question_mark", "dismiss", "Close"), ("q", "dismiss", "Close")]
+
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__()
+        self.lines = lines
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help"):
+            yield Static("\n".join(self.lines))
+            yield Static("Press Esc, ? or q to close.", id="help-footer")
+
+
+def help_lines(bindings: list[tuple[str, str, str]]) -> list[str]:
+    """One line per key: the key, then what it does. Duplicate keys are listed once."""
+    seen: set[str] = set()
+    lines = ["IndiaBloom keys", ""]
+    for key, _action, description in bindings:
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"  {key:<12} {description}")
+    return lines
 
 
 class IndiaBloomApp(App):
@@ -89,20 +139,30 @@ class IndiaBloomApp(App):
     #buttons Button { width: 100%; min-width: 0; }
     #links { height: 1fr; }
     #hint { height: auto; color: $warning; }
+    HelpScreen { align: center middle; }
+    #help { width: 60; height: auto; max-height: 90%; border: round $accent; padding: 1 2; background: $surface; }
+    #help-footer { color: $text-muted; }
     """
     BINDINGS = (
         [(key, f"tab('{name}')", TABS[name][0]) for key, name in TAB_NUMBER_KEYS.items()]
         + [(key, f"show('{view}')", VIEW_LABELS[view]) for key, view in VIEW_KEYS.items()]
-        + [("q", "quit", "Quit")]
+        + [("q", "quit", "Quit"), ("ctrl+f", "search", "Search"), ("escape", "close_search", "Close search"),
+           ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("question_mark", "help", "Help")]
     )
 
     def __init__(self, graph: Graph, names: dict[str, tuple[str, ...]] | None = None,
-                 services: Services | None = None, index_name: str = INDEX_NAME) -> None:
+                 services: Services | None = None, index_name: str = INDEX_NAME,
+                 watchlist_path: Path = WATCHLIST_FILE) -> None:
         super().__init__()
         self.graph = graph
         self.names = names or {}
         self.services = services or Services()
         self.index_name = index_name
+        self.watchlist_path = watchlist_path
+        self.positions = load_watchlist(watchlist_path)
+        self.screen_hits: list[dict] = []
+        self.screen_text = ""
+        self.screen_total = 0
         self.stocks: list[StockRow] = []
         self.company_names: dict[str, str] = {}  # ticker -> company name from the index list
         self.group: str | None = None
@@ -118,6 +178,8 @@ class IndiaBloomApp(App):
         yield Header()
         with Horizontal():
             with Vertical(id="left"):
+                yield Input(placeholder="Search ticker or company name. Enter jumps, Esc closes.",
+                            id="search")
                 with Horizontal(id="tabs"):
                     for name, (label, _) in TABS.items():
                         variant = "primary" if name == self.tab else "default"
@@ -131,9 +193,11 @@ class IndiaBloomApp(App):
                 yield stocks
                 yield Static("Starting...", id="status")
             with Vertical(id="right"):
+                yield Input(placeholder="Screen: conditions separated by commas, e.g. pe_trailing<20, roe>=15. Enter runs, Esc closes.",
+                            id="screen-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -141,6 +205,9 @@ class IndiaBloomApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#search", Input).display = False
+        self.query_one("#screen-input", Input).display = False
+        self.query_one("#stocks", DataTable).focus()  # keys must reach the view bindings, not the search box
         self._select_first_graph_node()
         self._load_market()
 
@@ -152,7 +219,11 @@ class IndiaBloomApp(App):
     # ----- events -------------------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "stocks" and event.row_key.value is not None:
+        if event.row_key.value is None:
+            return
+        if event.data_table.id == "stocks":
+            self.select_stock(str(event.row_key.value))
+        elif event.data_table.id == "links" and self.view in LIST_VIEWS:
             self.select_stock(str(event.row_key.value))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -181,17 +252,163 @@ class IndiaBloomApp(App):
 
     def select_stock(self, ticker: str) -> None:
         self.selected = ticker
-        self._render()
+        if self.view in LIST_VIEWS:
+            self.action_show("competitors")  # leaving the list for a single stock
+        else:
+            self._render()
+
+    # ----- screen (x) ---------------------------------------------------------
+
+    def action_open_screen(self) -> None:
+        box = self.query_one("#screen-input", Input)
+        box.display = True
+        box.value = ""
+        box.focus()
+
+    def _run_screen(self, text: str) -> None:
+        from indiabloom.fundamentals import load_snapshot
+        from indiabloom.screener import ScreenError, parse_condition, screen
+        from indiabloom.universe import UniverseError, load_index
+
+        parts = [p for p in text.split(",") if p.strip()]
+        try:
+            conditions = [parse_condition(p) for p in parts]
+        except ScreenError as exc:
+            self._show_message(str(exc))
+            return
+        try:
+            constituents = load_index(self.index_name)
+        except UniverseError:
+            constituents = []
+        snapshots = [s for s in (load_snapshot(c.ticker) for c in constituents) if s is not None]
+        self.screen_text = text
+        self.screen_total = len(snapshots)
+        self.screen_hits = screen(snapshots, conditions, top=100)
+        self.view = "screen"
+        for name in VIEW_LABELS:
+            self.query_one(f"#btn-{name}", Button).variant = "default"
+        self._show_screen_results()
+
+    def _show_screen_results(self) -> None:
+        from indiabloom.screener import metric
+
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        for key, label in (("ticker", "TICKER"), ("name", "NAME"), ("sector", "SECTOR"),
+                           ("mcap", "MCAP CR"), ("pe", "PE"), ("roe", "ROE %"), ("pb", "PB")):
+            table.add_column(label, key=key)
+
+        def fmt(value: object, digits: int = 1) -> str:
+            return "-" if value is None or isinstance(value, str) else f"{value:,.{digits}f}"
+
+        for s in self.screen_hits:
+            table.add_row(
+                s["ticker"], (s.get("name") or "")[:28], (s.get("sector") or "-")[:16],
+                fmt(metric(s, "market_cap_cr"), 0), fmt(s.get("pe_trailing")),
+                fmt(metric(s, "roe")), fmt(s.get("pb")), key=s["ticker"],
+            )
+        self.query_one("#summary", Static).update(
+            f"Screen: {len(self.screen_hits)} of {self.screen_total} cached stocks  |  {self.screen_text}"
+        )
+        hint = self.query_one("#hint", Static)
+        if self.screen_hits:
+            hint.update("Enter on a row opens that stock. Press x to change the screen.")
+        else:
+            hint.update("No stock matches. Press x to change the screen. Run fundamentals first if the cache is empty.")
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen(help_lines(self.BINDINGS)))
+
+    def action_search(self) -> None:
+        box = self.query_one("#search", Input)
+        box.display = True
+        box.value = ""
+        box.focus()
+
+    def _show_movers(self) -> None:
+        gainers, losers = top_movers(self.stocks, n=10)
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        for key, label in (("side", "SIDE"), ("ticker", "TICKER"), ("chg", "CHG%"),
+                           ("price", "PRICE"), ("sector", "SECTOR")):
+            table.add_column(label, key=key)
+        for side, rows in (("UP", gainers), ("DOWN", losers)):
+            for r in rows:
+                table.add_row(side, r.ticker, f"{r.change_pct:+.2f}",
+                              "-" if r.last is None else f"{r.last:,.2f}", r.group, key=r.ticker)
+        priced = sum(1 for r in self.stocks if r.change_pct is not None)
+        self.query_one("#summary", Static).update(
+            f"Top movers: {len(gainers)} gainers, {len(losers)} losers  |  {priced} stocks with a day change"
+        )
+        hint = self.query_one("#hint", Static)
+        hint.update("Day change from the last two closes. Enter on a row opens that stock."
+                    if priced else "No price data yet. Wait for the price download to finish.")
+
+    def action_close_search(self) -> None:
+        for box_id in ("#search", "#screen-input"):
+            box = self.query_one(box_id, Input)
+            if box.display:
+                box.display = False
+                self.query_one("#stocks", DataTable).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "screen-input":
+            text = event.value.strip()
+            event.input.display = False
+            self.query_one("#links", DataTable).focus()
+            if text:
+                self._run_screen(text)
+            return
+        if event.input.id != "search":
+            return
+        query = event.value.strip()
+        event.input.display = False
+        self.query_one("#stocks", DataTable).focus()
+        if not query:
+            return
+        tickers = list(dict.fromkeys([r.ticker for r in self.stocks] + self.graph.nodes()))
+        found = find_stock(query, tickers, {**self.company_names, **{t: v[0] for t, v in self.names.items()}})
+        if found is None:
+            self._show_status(f"No stock matches '{query}'.")
+            return
+        if self.tab != "all":
+            self.action_tab("all")  # the match must be visible in the list to be highlighted
+        index = next((i for i, r in enumerate(self.stocks) if r.ticker == found), None)
+        if index is not None:
+            self.query_one("#stocks", DataTable).move_cursor(row=index)
+        self.select_stock(found)
 
     # ----- stock list and loading status --------------------------------------
 
     def _show_status(self, text: str) -> None:
         self.query_one("#status", Static).update(text)
 
+    def _visible_stocks(self) -> list[StockRow]:
+        if self.tab == "watch":
+            watched = {p.ticker for p in self.positions}
+            return [r for r in self.stocks if r.ticker in watched]
+        return filter_group(self.stocks, self.group)
+
+    def action_watch_toggle(self) -> None:
+        """Add or remove the selected stock from the watchlist and save it."""
+        ticker = self.selected
+        if ticker is None:
+            return
+        if find_position(self.positions, ticker) is not None:
+            self.positions = remove_position(self.positions, ticker)
+            message = f"Removed {ticker} from the watchlist."
+        else:
+            self.positions = add_position(self.positions, ticker)
+            message = f"Added {ticker} to the watchlist. Set buy price with: python -m indiabloom watchlist add {ticker} --buy PRICE --qty N"
+        save_watchlist(self.positions, self.watchlist_path)
+        if self.tab == "watch":
+            self._render_stock_table()
+        self._show_status(message)
+
     def _render_stock_table(self) -> None:
         table = self.query_one("#stocks", DataTable)
         table.clear()
-        shown = filter_group(self.stocks, self.group)
+        shown = self._visible_stocks()
         for row in shown:
             table.add_row(
                 row.ticker,
@@ -253,6 +470,12 @@ class IndiaBloomApp(App):
     # ----- right pane ---------------------------------------------------------
 
     def _render(self) -> None:
+        if self.view == "screen":
+            self._show_screen_results()
+            return
+        if self.view == "movers":
+            self._show_movers()
+            return
         if self.selected is None:
             return
         ticker = self.selected
@@ -269,6 +492,9 @@ class IndiaBloomApp(App):
             return
         if self.view == "deals":
             self._show_deals(ticker)  # reads the local deals history only
+            return
+        if self.view == "position":
+            self._show_position(ticker)
             return
         cached = self._results.get((self.view, ticker))
         if cached is not None:
@@ -323,6 +549,22 @@ class IndiaBloomApp(App):
         for metric, value in fundamentals_rows(snap):
             table.add_row(metric, value)
         self.query_one("#hint", Static).update(f"Source: yfinance, fetched {snap.get('fetched_at', '?')}")
+
+    def _show_position(self, ticker: str) -> None:
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("METRIC", key="metric")
+        table.add_column("VALUE", key="value")
+        position = find_position(self.positions, ticker)
+        hint = self.query_one("#hint", Static)
+        if position is None:
+            hint.update(f"{ticker} is not in the watchlist. Press a to add it.")
+            return
+        row = next((r for r in self.stocks if r.ticker == ticker), None)
+        for metric, value in position_rows(position, None if row is None else row.last):
+            table.add_row(metric, value)
+        hint.update("Set buy price and quantity: python -m indiabloom watchlist add "
+                    f"{ticker} --buy PRICE --qty N")
 
     def _show_deals(self, ticker: str) -> None:
         table = self.query_one("#links", DataTable)

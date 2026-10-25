@@ -376,6 +376,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_fund.add_argument("--sleep", type=float, default=0.5, help="seconds between requests")
     p_fund.add_argument("--refresh", action="store_true", help="refetch even if the cache is fresh")
     sub.add_parser("deals", help="fetch today's NSE bulk and block deals into the history")
+    p_wl = sub.add_parser("watchlist", help="manage your watchlist and show P&L for positions with a cost")
+    p_wl.add_argument("action", choices=["add", "remove", "show"])
+    p_wl.add_argument("ticker", nargs="?", help="e.g. INFY.NS (Indian stocks need the .NS suffix)")
+    p_wl.add_argument("--buy", type=float, default=None, help="buy price per share")
+    p_wl.add_argument("--qty", type=float, default=None, help="number of shares")
+    p_scr = sub.add_parser("screen", help="filter an index on cached fundamentals, e.g. --where 'roe>15'")
+    p_scr.add_argument("--index", default="nifty500",
+                       choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_scr.add_argument("--where", action="append", default=[],
+                       help="condition such as pe_trailing<20, roe>=15, sector=bank (repeatable)")
+    p_scr.add_argument("--sort", default="market_cap_cr", help="field to sort by")
+    p_scr.add_argument("--asc", action="store_true", help="sort ascending instead of descending")
+    p_scr.add_argument("--top", type=int, default=None, help="show at most this many stocks")
     return parser
 
 
@@ -404,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_fundamentals(args)
         if args.command == "deals":
             return cmd_deals(args)
+        if args.command == "watchlist":
+            return cmd_watchlist(args)
+        if args.command == "screen":
+            return cmd_screen(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -427,3 +444,122 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"file not found: {exc}", file=sys.stderr)
         return EXIT_USAGE
+
+
+def cmd_watchlist(args: argparse.Namespace) -> int:
+    from indiabloom.market import MarketDataError, download_bulk
+    from indiabloom.watchlist import (
+        add_position,
+        find_position,
+        load_watchlist,
+        remove_position,
+        save_watchlist,
+    )
+
+    positions = load_watchlist()
+    if args.action == "add":
+        if not args.ticker:
+            print("usage: watchlist add TICKER [--buy PRICE] [--qty N]", file=sys.stderr)
+            return EXIT_USAGE
+        ticker = args.ticker.upper()
+        positions = add_position(positions, ticker, args.buy, args.qty)
+        save_watchlist(positions)
+        print(f"saved {ticker} (buy {args.buy if args.buy is not None else '-'}, "
+              f"qty {args.qty if args.qty is not None else '-'}) in the watchlist")
+        return EXIT_OK
+    if args.action == "remove":
+        if not args.ticker:
+            print("usage: watchlist remove TICKER", file=sys.stderr)
+            return EXIT_USAGE
+        ticker = args.ticker.upper()
+        if find_position(positions, ticker) is None:
+            print(f"{ticker} is not in the watchlist")
+            return EXIT_USAGE
+        save_watchlist(remove_position(positions, ticker))
+        print(f"removed {ticker}")
+        return EXIT_OK
+
+    # show: last price from the cached price download, then P&L where cost is known
+    if not positions:
+        print("watchlist is empty. Add a stock: python -m indiabloom watchlist add INFY.NS --buy 1500 --qty 10")
+        return EXIT_OK
+    try:
+        closes = download_bulk([p.ticker for p in positions], period="5d")
+    except MarketDataError as exc:
+        print(f"data error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    rows = []
+    total_cost = 0.0
+    total_value = 0.0
+    for p in positions:
+        series = closes[p.ticker].dropna() if p.ticker in closes.columns else []
+        last = float(series.iloc[-1]) if len(series) else None
+        cost = p.buy_price * p.quantity if p.buy_price is not None and p.quantity is not None else None
+        value = last * p.quantity if last is not None and p.quantity is not None else None
+        if cost is not None and value is not None:
+            total_cost += cost
+            total_value += value
+        pnl = value - cost if cost is not None and value is not None else None
+        rows.append([
+            p.ticker,
+            "-" if p.buy_price is None else f"{p.buy_price:,.2f}",
+            "-" if p.quantity is None else f"{p.quantity:,g}",
+            "-" if last is None else f"{last:,.2f}",
+            "-" if pnl is None else f"{pnl:+,.2f}",
+            "-" if pnl is None or not cost else f"{pnl / cost * 100:+.2f}%",
+        ])
+    _print_table(["TICKER", "BUY", "QTY", "LAST", "P&L", "P&L %"], rows)
+    if total_cost:
+        print(f"\nholdings with a cost basis: cost {total_cost:,.2f}, value {total_value:,.2f}, "
+              f"P&L {total_value - total_cost:+,.2f} ({(total_value - total_cost) / total_cost * 100:+.2f}%)")
+    _disclaimer()
+    return EXIT_OK
+
+
+def cmd_screen(args: argparse.Namespace) -> int:
+    from indiabloom.fundamentals import load_snapshot
+    from indiabloom.screener import ScreenError, metric, parse_condition, screen
+    from indiabloom.universe import UniverseError, load_index
+
+    try:
+        conditions = [parse_condition(text) for text in args.where]
+        constituents = load_index(args.index)
+    except (ScreenError, UniverseError) as exc:
+        print(f"screen error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    snapshots = []
+    missing = 0
+    for c in constituents:
+        snap = load_snapshot(c.ticker)
+        if snap is None:
+            missing += 1
+            continue
+        snapshots.append(snap)
+    try:
+        hits = screen(snapshots, conditions, sort_by=args.sort, descending=not args.asc, top=args.top)
+    except ScreenError as exc:
+        print(f"screen error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    def fmt(value: object, digits: int = 1) -> str:
+        return "-" if value is None or isinstance(value, str) else f"{value:,.{digits}f}"
+
+    rows = []
+    for s in hits:
+        rows.append([
+            s["ticker"],
+            (s.get("name") or "")[:28],
+            (s.get("sector") or "-")[:16],
+            fmt(metric(s, "market_cap_cr"), 0),
+            fmt(s.get("pe_trailing")),
+            fmt(metric(s, "roe")),
+            fmt(s.get("pb")),
+        ])
+    print(f"{len(hits)} of {len(snapshots)} cached stocks match "
+          f"({' and '.join(args.where) or 'no filters'}), sorted by {args.sort}")
+    if rows:
+        _print_table(["TICKER", "NAME", "SECTOR", "MCAP CR", "PE", "ROE %", "PB"], rows)
+    if missing:
+        print(f"{missing} stocks have no fundamentals cache yet; run: python -m indiabloom fundamentals --index {args.index}")
+    _disclaimer()
+    return EXIT_OK

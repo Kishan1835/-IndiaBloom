@@ -89,3 +89,34 @@ def filter_group(rows: list[StockRow], group: str | None) -> list[StockRow]:
     if group is None:
         return rows
     return [r for r in rows if r.group == group]
+
+
+def find_stock(query: str, tickers: list[str], names: dict[str, str]) -> str | None:
+    """Best match for a search: exact code, then code prefix, then company name.
+
+    The code may be typed with or without ".NS" (INFY or INFY.NS). Within each
+    rule the shortest, then alphabetically first, code wins, so results are stable.
+    """
+    q = query.strip().upper()
+    if not q:
+        return None
+    by_code = {t.removesuffix(".NS").upper(): t for t in sorted(tickers)}
+    code = q.removesuffix(".NS")
+    if code in by_code:
+        return by_code[code]
+    prefix = sorted((c for c in by_code if c.startswith(code)), key=lambda c: (len(c), c))
+    if prefix:
+        return by_code[prefix[0]]
+    lowered = query.strip().lower()
+    for ticker in sorted(tickers):
+        if lowered in names.get(ticker, "").lower():
+            return ticker
+    return None
+
+
+def top_movers(rows: list[StockRow], n: int = 10) -> tuple[list[StockRow], list[StockRow]]:
+    """Largest day gainers and losers. Only stocks with a day change are considered."""
+    priced = [r for r in rows if r.change_pct is not None]
+    gainers = sorted((r for r in priced if r.change_pct > 0), key=lambda r: -r.change_pct)[:n]
+    losers = sorted((r for r in priced if r.change_pct < 0), key=lambda r: r.change_pct)[:n]
+    return gainers, losers

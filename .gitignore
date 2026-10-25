@@ -25,3 +25,4 @@ desktop.ini
 *.pem
 *.key
 data/fundamentals/
+data/watchlist.json

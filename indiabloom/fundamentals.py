@@ -271,3 +271,10 @@ def fundamentals_rows(snap: dict[str, Any]) -> list[tuple[str, str]]:
         for year, value in annual.get(key, []):
             rows.append((f"{label} FY ending {year} ({unit})", _statement_amount(value, currency)))
     return rows
+
+
+def effective_roe(snap: dict[str, Any]) -> float | None:
+    """Reported ROE if yfinance has it, otherwise net income / equity from the statements."""
+    if snap.get("roe") is not None:
+        return snap["roe"]
+    return _computed_roe(snap.get("annual") or {})[1]
