@@ -1,0 +1,79 @@
+# Forward signal ledger, run on GitHub's schedule.
+#
+#   log   02:30 UTC = 08:00 IST, before the Indian open (cutoff is 09:15 IST).
+#         GitHub can start scheduled jobs late, so the early time leaves margin.
+#         The CLI refuses to log after the cutoff, so a late run records nothing.
+#   score 11:00 UTC = 16:30 IST, after the Indian close.
+#
+# Each run commits the updated ledger back to the repository.
+
+name: daily-signals
+
+on:
+  schedule:
+    - cron: "30 2 * * 1-5"   # log, weekdays
+    - cron: "0 11 * * 1-5"   # score, weekdays
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "log or score"
+        required: true
+        default: "score"
+        type: choice
+        options: [log, score]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-signals
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Decide mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          else
+            # cron times are UTC: 02:30 is the log slot, 11:00 is the score slot
+            if [ "$(date -u +%H%M)" -lt 1000 ]; then
+              echo "mode=log" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=score" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Log predictions
+        if: steps.mode.outputs.mode == 'log'
+        run: python -m indiabloom log-signals --index nifty500 --top 20
+
+      - name: Score predictions
+        if: steps.mode.outputs.mode == 'score'
+        run: python -m indiabloom score-signals --recent 10
+
+      - name: Commit ledger
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/ledger/signals.csv
+          if git diff --cached --quiet; then
+            echo "no ledger changes"
+          else
+            git commit -m "ledger: ${{ steps.mode.outputs.mode }} $(date -u +%Y-%m-%d)"
+            git push
+          fi
