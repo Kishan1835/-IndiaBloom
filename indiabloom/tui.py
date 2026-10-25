@@ -15,6 +15,7 @@ Keys
   m top movers (largest day gainers and losers)
   h price chart with 1M, 6M and 1Y ranges (text chart from daily closes)
   o compare up to 6 stocks on one chart, rebased to 100 (e.g. INFY.NS, TCS.NS, MU)
+  ctrl+p command palette: pick any view or action by name
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -24,10 +25,11 @@ Slow data loads in background threads, so the screen stays responsive.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static
@@ -152,7 +154,7 @@ class IndiaBloomApp(App):
         + [(key, f"show('{view}')", VIEW_LABELS[view]) for key, view in VIEW_KEYS.items()]
         + [("q", "quit", "Quit"), ("ctrl+f", "search", "Search"), ("escape", "close_search", "Close search"),
            ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("o", "open_compare", "Compare"),
-           ("question_mark", "help", "Help")]
+           ("ctrl+p", "command_palette", "Command palette"), ("question_mark", "help", "Help")]
     )
 
     def __init__(self, graph: Graph, names: dict[str, tuple[str, ...]] | None = None,
@@ -325,6 +327,29 @@ class IndiaBloomApp(App):
             hint.update("Enter on a row opens that stock. Press x to change the screen.")
         else:
             hint.update("No stock matches. Press x to change the screen. Run fundamentals first if the cache is empty.")
+
+    def get_system_commands(self, screen):
+        """Command palette entries (Ctrl+P): every stock-list tab, every view, and the main actions.
+
+        Textual's own commands (theme, quit, and so on) are kept.
+        """
+        yield from super().get_system_commands(screen)
+        for name, (label, _group) in TABS.items():
+            yield SystemCommand(f"Stock list: {label}", f"Show the {label} tab of the stock list",
+                                partial(self.action_tab, name))
+        for view, label in VIEW_LABELS.items():
+            yield SystemCommand(f"View: {label}", f"Show the {label} view for the selected stock",
+                                partial(self.action_show, view))
+        actions = (
+            ("Search a stock", "Find a stock by ticker or company name (Ctrl+F)", self.action_search),
+            ("Screen the index", "Filter on fundamentals, e.g. pe_trailing<20, roe>=15 (x)", self.action_open_screen),
+            ("Compare stocks", "Chart up to six stocks rebased to 100 (o)", self.action_open_compare),
+            ("Toggle watchlist", "Add or remove the selected stock from the watchlist (a)", self.action_watch_toggle),
+            ("Show all keys", "Open the key list (?)", self.action_help),
+            ("Close the input box", "Close the search, screen or compare box (Esc)", self.action_close_search),
+        )
+        for title, help_text, callback in actions:
+            yield SystemCommand(title, help_text, callback)
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen(help_lines(self.BINDINGS)))
