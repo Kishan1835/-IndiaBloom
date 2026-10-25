@@ -239,6 +239,28 @@ def cmd_universe_scan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_peers(args: argparse.Namespace) -> int:
+    from indiabloom.market import download_bulk
+    from indiabloom.peers import PEERS_FILE, save_peers, statistical_peers
+    from indiabloom.universe import UniverseError, load_index
+
+    try:
+        constituents = load_index(args.index)
+    except UniverseError as exc:
+        print(f"universe error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    industries = {c.ticker: c.industry for c in constituents}
+    closes = download_bulk(list(industries), period="2y", use_cache=not args.refresh)
+    peers = statistical_peers(closes, industries, k=args.top)
+    save_peers(PEERS_FILE, peers)
+    ranked = len({p.ticker for p in peers})
+    print(f"saved {len(peers)} statistical peers for {ranked} stocks to {PEERS_FILE}")
+    print("Peers are same-industry stocks whose prices move together. They are not competitors.")
+    print("Recorded competitors come from data/relations.json.")
+    _disclaimer()
+    return EXIT_OK
+
+
 def cmd_ui(args: argparse.Namespace, graph: Graph) -> int:
     from indiabloom.tui import IndiaBloomApp
 
@@ -300,6 +322,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="add out-of-sample hit rate for the top rows")
     p_us.add_argument("--refresh", action="store_true", help="ignore the price cache")
     add_signal_parsers(sub)
+
+    p_peers = sub.add_parser("peers", help="compute same-industry statistical peers for an index")
+    p_peers.add_argument("--index", default="nifty500",
+                         choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_peers.add_argument("--top", type=int, default=5, help="peers per stock")
+    p_peers.add_argument("--refresh", action="store_true", help="ignore the price cache")
     return parser
 
 
@@ -322,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_log_signals(args)
         if args.command == "score-signals":
             return cmd_score_signals(args)
+        if args.command == "peers":
+            return cmd_peers(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)

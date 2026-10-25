@@ -25,6 +25,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Static
 from indiabloom.companies import find_mentions
 from indiabloom.graph import Graph
 from indiabloom.news import sentiment, sentiment_label
+from indiabloom.peers import load_peers
 from indiabloom.scanner import pair_metrics
 from indiabloom.sectors import SECTORS_FILE, load_rules
 from indiabloom.services import Services
@@ -101,6 +102,7 @@ class IndiaBloomApp(App):
         self.selected: str | None = None
         self.view = "competitors"
         self._results: dict[tuple[str, str], object] = {}
+        self.peers = load_peers()
 
     # ----- layout -------------------------------------------------------------
 
@@ -279,14 +281,21 @@ class IndiaBloomApp(App):
         table.add_column("CONF", key="conf")
         table.add_column("RATIONALE", key="why")
         links = getattr(self.graph, self.view)(ticker)
-        if not links:
-            self.query_one("#hint", Static).update(
-                EMPTY_HINT.format(view=VIEW_LABELS[self.view].lower(), ticker=ticker)
-            )
-            return
         for link in links:
             table.add_row(link.other, link.relation, link.direction or "mutual",
                           link.confidence, link.rationale)
+        if self.view == "competitors":
+            # statistical peers come from price history; label them so they are not
+            # mistaken for recorded business competitors
+            for peer in self.peers.get(ticker, []):
+                table.add_row(
+                    peer.peer, "stat-peer", "mutual", f"corr {peer.corr:.2f}",
+                    f"same industry ({peer.industry}); prices move together, not a business link",
+                )
+        if table.row_count == 0:
+            self.query_one("#hint", Static).update(
+                EMPTY_HINT.format(view=VIEW_LABELS[self.view].lower(), ticker=ticker)
+            )
 
     def _populate(self, view: str, data: object) -> None:
         table = self.query_one("#links", DataTable)
