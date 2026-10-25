@@ -261,6 +261,48 @@ def cmd_peers(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_fundamentals(args: argparse.Namespace) -> int:
+    from indiabloom.fundamentals import FUNDAMENTALS_DIR, run_fundamentals
+    from indiabloom.universe import UniverseError, load_index
+
+    try:
+        constituents = load_index(args.index)
+    except UniverseError as exc:
+        print(f"universe error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    tickers = [c.ticker for c in constituents]
+
+    def progress(done: int, total: int, ticker: str) -> None:
+        print(f"[{done}/{total}] {ticker}", flush=True)
+
+    report = run_fundamentals(tickers, FUNDAMENTALS_DIR, sleep_s=args.sleep, progress=progress,
+                              refresh=args.refresh)
+    print(f"fetched {report.fetched}, already fresh {report.skipped_fresh}, "
+          f"failed {len(report.failed)} of {len(tickers)} in {args.index}")
+    for failure in report.failed:
+        print(f"  failed {failure.ticker}: {failure.reason}", file=sys.stderr)
+    print(f"cache: {FUNDAMENTALS_DIR}  (rerun to retry failures; cached stocks are skipped)")
+    print("Source: yfinance (unofficial). Ratios are as reported by Yahoo Finance.")
+    _disclaimer()
+    return EXIT_OK if not report.failed else EXIT_DATA
+
+
+def cmd_deals(args: argparse.Namespace) -> int:
+    from indiabloom.deals import DEALS_FILE, DealsError, load_history, update_deals
+
+    try:
+        fetched, added = update_deals()
+    except DealsError as exc:
+        print(f"deals error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    total = len(load_history())
+    print(f"NSE bulk and block deals: {fetched} rows in today's files, {added} new, {total} in history")
+    print(f"history: {DEALS_FILE}")
+    print("These are large trades only (bulk: over 0.5% of a company's shares; block: negotiated).")
+    _disclaimer()
+    return EXIT_OK
+
+
 def cmd_ui(args: argparse.Namespace, graph: Graph) -> int:
     from indiabloom.tui import IndiaBloomApp
 
@@ -328,6 +370,12 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=["nifty50", "nifty100", "nifty200", "nifty500"])
     p_peers.add_argument("--top", type=int, default=5, help="peers per stock")
     p_peers.add_argument("--refresh", action="store_true", help="ignore the price cache")
+    p_fund = sub.add_parser("fundamentals", help="fetch valuation and financial snapshots for an index")
+    p_fund.add_argument("--index", default="nifty500",
+                        choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_fund.add_argument("--sleep", type=float, default=0.5, help="seconds between requests")
+    p_fund.add_argument("--refresh", action="store_true", help="refetch even if the cache is fresh")
+    sub.add_parser("deals", help="fetch today's NSE bulk and block deals into the history")
     return parser
 
 
@@ -352,6 +400,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_score_signals(args)
         if args.command == "peers":
             return cmd_peers(args)
+        if args.command == "fundamentals":
+            return cmd_fundamentals(args)
+        if args.command == "deals":
+            return cmd_deals(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)

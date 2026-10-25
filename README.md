@@ -145,3 +145,9 @@ python -m indiabloom score-signals                           # after Indian sess
 
 Read the result over weeks, not days. Top picks on one day share one market
 move, so a few sessions tell you almost nothing.
+
+## Fundamentals and deals (new)
+python -m indiabloom fundamentals --index nifty500     # valuation and financials per stock, cached in data/fundamentals/ (resumable)
+python -m indiabloom deals                              # today's NSE bulk and block deals, appended to data/deals/deals.csv
+
+In the UI, press f for Fundamentals and d for Deals. Fundamentals come from yfinance, an unofficial source: coverage varies and ratios are as Yahoo reports them. Some stocks (e.g. Infosys) report statements in USD, and the view labels the currency. Deals are large trades only (bulk over 0.5% of shares, and block trades). They do not show all institutional flows and do not show customers or suppliers.

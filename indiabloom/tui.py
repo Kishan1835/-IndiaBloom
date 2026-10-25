@@ -8,7 +8,7 @@ Right pane: one view at a time.
 
 Keys
   1 All   2 IT   3 Banks   4 Manufacturing   5 Pharma   6 US
-  c competitors   s suppliers   u customers   r correlation   n news   q quit
+  c competitors   s suppliers   u customers   r correlation   n news   f fundamentals   d deals   q quit
 
 The status line under the stock list shows loading progress: the index list,
 the price download, and the result (with the date of the latest prices).
@@ -23,6 +23,8 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Footer, Header, Static
 
 from indiabloom.companies import find_mentions
+from indiabloom.deals import deals_for, load_history as load_deals
+from indiabloom.fundamentals import fundamentals_rows, load_snapshot
 from indiabloom.graph import Graph
 from indiabloom.news import sentiment, sentiment_label
 from indiabloom.peers import load_peers
@@ -44,8 +46,14 @@ VIEW_LABELS = {
     "customers": "Customers",
     "correlation": "Correlation",
     "news": "News",
+    "fundamentals": "Fundamentals",
+    "deals": "Deals",
 }
-VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news"}
+VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
+             "f": "fundamentals", "d": "deals"}
+FUNDAMENTALS_HINT = (
+    "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
+)
 
 # tab key -> (button label, sector group or None for all)
 TABS = {
@@ -125,7 +133,7 @@ class IndiaBloomApp(App):
             with Vertical(id="right"):
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -256,6 +264,12 @@ class IndiaBloomApp(App):
         if self.view in GRAPH_VIEWS:
             self._show_graph_view(ticker)
             return
+        if self.view == "fundamentals":
+            self._show_fundamentals(ticker)  # reads the local cache only; no network
+            return
+        if self.view == "deals":
+            self._show_deals(ticker)  # reads the local deals history only
+            return
         cached = self._results.get((self.view, ticker))
         if cached is not None:
             self._populate(self.view, cached)
@@ -296,6 +310,37 @@ class IndiaBloomApp(App):
             self.query_one("#hint", Static).update(
                 EMPTY_HINT.format(view=VIEW_LABELS[self.view].lower(), ticker=ticker)
             )
+
+    def _show_fundamentals(self, ticker: str) -> None:
+        snap = load_snapshot(ticker)
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("METRIC", key="metric")
+        table.add_column("VALUE", key="value")
+        if snap is None:
+            self.query_one("#hint", Static).update(FUNDAMENTALS_HINT.format(ticker=ticker, index=self.index_name))
+            return
+        for metric, value in fundamentals_rows(snap):
+            table.add_row(metric, value)
+        self.query_one("#hint", Static).update(f"Source: yfinance, fetched {snap.get('fetched_at', '?')}")
+
+    def _show_deals(self, ticker: str) -> None:
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        for key, label in (("date", "DATE"), ("kind", "TYPE"), ("side", "SIDE"),
+                           ("client", "CLIENT"), ("qty", "QTY"), ("price", "PRICE"), ("value", "VALUE CR")):
+            table.add_column(label, key=key)
+        deals = deals_for(ticker, load_deals())
+        for d in deals:
+            table.add_row(d.date, d.kind, d.side, d.client, f"{d.quantity:,}",
+                          f"{d.price:,.2f}", f"{d.value_cr:,.2f}")
+        hint = self.query_one("#hint", Static)
+        if deals:
+            hint.update("Bulk/block deals only: large trades, not all institutional flows. "
+                        "History grows each time `python -m indiabloom deals` runs.")
+        else:
+            hint.update(f"No bulk or block deals recorded for {ticker}. History starts from the "
+                        "first `python -m indiabloom deals` run.")
 
     def _populate(self, view: str, data: object) -> None:
         table = self.query_one("#links", DataTable)
