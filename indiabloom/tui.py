@@ -18,6 +18,7 @@ Keys
   o compare up to 6 stocks on one chart, rebased to 100 (e.g. INFY.NS, TCS.NS, MU)
   ctrl+p command palette: pick any view or action by name
   e export the table on the right to CSV; ctrl+e exports the stock list (Watch tab: watchlist with P&L)
+  l alerts: your rules and recent fired alerts; ctrl+l adds or removes a rule (e.g. 'INFY.NS above 1700', 'remove 3')
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -37,6 +38,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
 from indiabloom.companies import find_mentions
+from indiabloom.alerts import ALERTS_FILE, LOG_FILE as ALERT_LOG_FILE, AlertError, apply_alert_text, describe, load_log
+from indiabloom.alerts import load_rules as load_alert_rules
 from indiabloom.chart import chart_lines
 from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
@@ -79,10 +82,12 @@ VIEW_LABELS = {
     "movers": "Movers",
     "chart": "Chart",
     "events": "Events",
+    "alerts": "Alerts",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
-             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart", "k": "events"}
-LIST_VIEWS = ("screen", "movers", "compare")  # right pane shows a list or chart, not one stock's data
+             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart", "k": "events",
+             "l": "alerts"}
+LIST_VIEWS = ("screen", "movers", "compare", "alerts")  # right pane shows a list or chart, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
 )
@@ -159,12 +164,14 @@ class IndiaBloomApp(App):
         + [("q", "quit", "Quit"), ("ctrl+f", "search", "Search"), ("escape", "close_search", "Close search"),
            ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("o", "open_compare", "Compare"),
            ("ctrl+p", "command_palette", "Command palette"), ("question_mark", "help", "Help"),
-           ("e", "export_view", "Export view"), ("ctrl+e", "export_stocks", "Export stock list")]
+           ("e", "export_view", "Export view"), ("ctrl+e", "export_stocks", "Export stock list"),
+           ("ctrl+l", "open_alert_input", "Add or remove alert")]
     )
 
     def __init__(self, graph: Graph, names: dict[str, tuple[str, ...]] | None = None,
                  services: Services | None = None, index_name: str = INDEX_NAME,
-                 watchlist_path: Path = WATCHLIST_FILE, exports_dir: Path = EXPORTS_DIR) -> None:
+                 watchlist_path: Path = WATCHLIST_FILE, exports_dir: Path = EXPORTS_DIR,
+                 alerts_path: Path = ALERTS_FILE, alert_log_path: Path = ALERT_LOG_FILE) -> None:
         super().__init__()
         self.graph = graph
         self.names = names or {}
@@ -172,6 +179,9 @@ class IndiaBloomApp(App):
         self.index_name = index_name
         self.watchlist_path = watchlist_path
         self.exports_dir = exports_dir
+        self.alerts_path = alerts_path
+        self.alert_log_path = alert_log_path
+        self._row_tickers: dict[str, str] = {}  # table row key -> ticker, for views whose keys are not tickers
         self.positions = load_watchlist(watchlist_path)
         self.screen_hits: list[dict] = []
         self.screen_text = ""
@@ -212,9 +222,11 @@ class IndiaBloomApp(App):
                             id="screen-input")
                 yield Input(placeholder="Compare: tickers separated by commas, e.g. INFY.NS, TCS.NS, MU. Enter runs, Esc closes.",
                             id="compare-input")
+                yield Input(placeholder="Alert: 'INFY.NS above 1700', 'MU move_down -3', 'INFY.NS deals', 'TCS.NS news', or 'remove 3'. Enter saves, Esc closes.",
+                            id="alert-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events", "alerts"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -225,6 +237,7 @@ class IndiaBloomApp(App):
         self.query_one("#search", Input).display = False
         self.query_one("#screen-input", Input).display = False
         self.query_one("#compare-input", Input).display = False
+        self.query_one("#alert-input", Input).display = False
         self.query_one("#stocks", DataTable).focus()  # keys must reach the view bindings, not the search box
         self._select_first_graph_node()
         self._load_market()
@@ -242,7 +255,8 @@ class IndiaBloomApp(App):
         if event.data_table.id == "stocks":
             self.select_stock(str(event.row_key.value))
         elif event.data_table.id == "links" and self.view in LIST_VIEWS:
-            self.select_stock(str(event.row_key.value))
+            key = str(event.row_key.value)
+            self.select_stock(self._row_tickers.get(key, key))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -360,6 +374,49 @@ class IndiaBloomApp(App):
         for title, help_text, callback in actions:
             yield SystemCommand(title, help_text, callback)
 
+    def action_open_alert_input(self) -> None:
+        box = self.query_one("#alert-input", Input)
+        box.display = True
+        box.value = ""
+        box.focus()
+
+    @work(thread=True, exclusive=True, group="alert-edit")
+    def _apply_alert(self, text: str) -> None:
+        # a news rule reads headlines over the network, so this runs off the UI thread
+        try:
+            message = apply_alert_text(text, self.alerts_path)
+        except AlertError as exc:
+            message = f"alert not saved: {exc}"
+        self.call_from_thread(self._alert_done, message)
+
+    def _alert_done(self, message: str) -> None:
+        self._show_status(message)
+        if self.view == "alerts":
+            self._render()
+
+    def _show_alerts(self) -> None:
+        rules, _ = load_alert_rules(self.alerts_path)
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        for key, label in (("when", "WHEN"), ("id", "ID"), ("ticker", "TICKER"), ("detail", "DETAIL")):
+            table.add_column(label, key=key)
+        self._row_tickers = {}
+        for r in sorted(rules, key=lambda r: r.id):
+            detail = describe(r) + (f"  (last price alert {r.last_fired})" if r.last_fired else "")
+            key = f"rule-{r.id}"
+            table.add_row("rule", str(r.id), r.ticker, detail, key=key)
+            self._row_tickers[key] = r.ticker
+        fired = load_log(self.alert_log_path, limit=30)
+        for i, row in enumerate(fired):
+            key = f"log-{i}"
+            table.add_row(row["time"], row["rule_id"], row["ticker"], row["message"], key=key)
+            self._row_tickers[key] = row["ticker"]
+        self.query_one("#summary", Static).update(
+            f"Alerts: {len(rules)} rules, {len(fired)} recent fired (newest first)")
+        self.query_one("#hint", Static).update(
+            "ctrl+l adds or removes: 'INFY.NS above 1700', 'MU move_down -3', 'INFY.NS deals', "
+            "'TCS.NS news', 'remove 3'. Enter on a row opens that stock. Fired alerts are in data/alerts/log.csv.")
+
     def action_export_view(self) -> None:
         """Save the table on the right pane to data/exports as CSV."""
         if self.view in ("chart", "compare"):
@@ -471,13 +528,20 @@ class IndiaBloomApp(App):
                     if priced else "No price data yet. Wait for the price download to finish.")
 
     def action_close_search(self) -> None:
-        for box_id in ("#search", "#screen-input", "#compare-input"):
+        for box_id in ("#search", "#screen-input", "#compare-input", "#alert-input"):
             box = self.query_one(box_id, Input)
             if box.display:
                 box.display = False
                 self.query_one("#stocks", DataTable).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "alert-input":
+            text = event.value.strip()
+            event.input.display = False
+            self.query_one("#links", DataTable).focus()
+            if text:
+                self._apply_alert(text)
+            return
         if event.input.id == "compare-input":
             text = event.value.strip()
             event.input.display = False
@@ -602,6 +666,9 @@ class IndiaBloomApp(App):
     # ----- right pane ---------------------------------------------------------
 
     def _render(self) -> None:
+        if self.view == "alerts":
+            self._show_alerts()
+            return
         if self.view == "compare":
             self._show_compare()
             return

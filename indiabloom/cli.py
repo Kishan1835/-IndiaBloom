@@ -618,11 +618,9 @@ def cmd_screen(args: argparse.Namespace) -> int:
 
 
 def _alert_news_query(ticker: str) -> str:
-    from indiabloom.companies import DEFAULT_COMPANIES, load_companies
+    from indiabloom.alerts import news_query
 
-    names = load_companies(DEFAULT_COMPANIES)
-    code = ticker.removesuffix(".NS")
-    return f"{names[ticker][0] if ticker in names else code} stock"
+    return news_query(ticker)
 
 
 def _run_alert_check(refresh: bool) -> list:

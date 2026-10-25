@@ -159,3 +159,102 @@ def describe(rule: Rule) -> str:
 
 def to_dict(rule: Rule) -> dict[str, Any]:
     return asdict(rule)
+
+
+RULE_WORDS = {"above": "price_above", "below": "price_below", "move_up": "move_above",
+              "move_down": "move_below", "deals": "deal", "news": "news"}
+
+
+@dataclass(frozen=True)
+class ParsedRule:
+    ticker: str
+    kind: str
+    threshold: float | None
+
+
+def parse_rule_text(text: str) -> ParsedRule:
+    """'INFY.NS above 1700', 'MU move_down -3', 'INFY.NS deals' or 'TCS.NS news'."""
+    parts = text.split()
+    usage = "use TICKER above|below|move_up|move_down NUMBER, or TICKER deals|news"
+    if len(parts) < 2:
+        raise AlertError(usage)
+    ticker = parts[0].upper()
+    word = parts[1].lower()
+    if word not in RULE_WORDS:
+        raise AlertError(f"unknown rule '{word}'; {usage}")
+    kind = RULE_WORDS[word]
+    if kind in NEEDS_NUMBER:
+        if len(parts) != 3:
+            raise AlertError(f"{word} needs a number, e.g. {ticker} {word} 1700")
+        try:
+            threshold = float(parts[2])
+        except ValueError as exc:
+            raise AlertError(f"'{parts[2]}' is not a number") from exc
+    else:
+        if len(parts) != 2:
+            raise AlertError(f"{word} takes no number")
+        threshold = None
+    validate(kind, threshold)
+    return ParsedRule(ticker, kind, threshold)
+
+
+def parse_remove(text: str) -> int | None:
+    """The rule id in 'remove 3' (or 'rm 3'), or None when the text is not a removal."""
+    parts = text.split()
+    if len(parts) == 2 and parts[0].lower() in ("remove", "rm"):
+        try:
+            return int(parts[1])
+        except ValueError as exc:
+            raise AlertError("remove needs a rule id number, e.g. remove 3") from exc
+    return None
+
+
+def news_query(ticker: str) -> str:
+    from indiabloom.companies import DEFAULT_COMPANIES, load_companies
+
+    names = load_companies(DEFAULT_COMPANIES)
+    code = ticker.removesuffix(".NS")
+    return f"{names[ticker][0] if ticker in names else code} stock"
+
+
+def initial_seen(ticker: str, kind: str) -> list[str]:
+    """Items that already exist when a rule is created, so only later ones alert."""
+    if kind == "deal":
+        from indiabloom.deals import load_history
+
+        code = ticker.removesuffix(".NS")
+        return [deal_key(d) for d in load_history() if d.symbol == code][-MAX_SEEN:]
+    if kind == "news":
+        from indiabloom.news import NewsError, fetch_news
+
+        try:
+            return [item.title for item in fetch_news(news_query(ticker))][:MAX_SEEN]
+        except NewsError as exc:
+            raise AlertError(f"could not read current headlines ({exc}); try again later") from exc
+    return []
+
+
+def apply_alert_text(text: str, path: Path = ALERTS_FILE) -> str:
+    """Add a rule or remove one, from the text typed in the TUI. Returns a status message."""
+    removal = parse_remove(text)
+    rules, next_id = load_rules(path)
+    if removal is not None:
+        remaining = [r for r in rules if r.id != removal]
+        if len(remaining) == len(rules):
+            raise AlertError(f"no rule with id {removal}")
+        save_rules(remaining, next_id, path)
+        return f"removed rule {removal}"
+    parsed = parse_rule_text(text)
+    rule = Rule(id=next_id, ticker=parsed.ticker, kind=parsed.kind, threshold=parsed.threshold,
+                seen=initial_seen(parsed.ticker, parsed.kind))
+    save_rules([*rules, rule], next_id + 1, path)
+    return f"added rule {rule.id}: {rule.ticker} {describe(rule)}"
+
+
+def load_log(path: Path = LOG_FILE, limit: int = 30) -> list[dict[str, str]]:
+    """The most recent fired alerts, newest first."""
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    return rows[-limit:][::-1]
