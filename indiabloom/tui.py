@@ -16,6 +16,7 @@ Keys
   h price chart with 1M, 6M and 1Y ranges (text chart from daily closes)
   o compare up to 6 stocks on one chart, rebased to 100 (e.g. INFY.NS, TCS.NS, MU)
   ctrl+p command palette: pick any view or action by name
+  e export the table on the right to CSV; ctrl+e exports the stock list (Watch tab: watchlist with P&L)
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -37,6 +38,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 from indiabloom.companies import find_mentions
 from indiabloom.chart import chart_lines
 from indiabloom.deals import deals_for, load_history as load_deals
+from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
 from indiabloom.graph import Graph
 from indiabloom.news import sentiment, sentiment_label
@@ -154,18 +156,20 @@ class IndiaBloomApp(App):
         + [(key, f"show('{view}')", VIEW_LABELS[view]) for key, view in VIEW_KEYS.items()]
         + [("q", "quit", "Quit"), ("ctrl+f", "search", "Search"), ("escape", "close_search", "Close search"),
            ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("o", "open_compare", "Compare"),
-           ("ctrl+p", "command_palette", "Command palette"), ("question_mark", "help", "Help")]
+           ("ctrl+p", "command_palette", "Command palette"), ("question_mark", "help", "Help"),
+           ("e", "export_view", "Export view"), ("ctrl+e", "export_stocks", "Export stock list")]
     )
 
     def __init__(self, graph: Graph, names: dict[str, tuple[str, ...]] | None = None,
                  services: Services | None = None, index_name: str = INDEX_NAME,
-                 watchlist_path: Path = WATCHLIST_FILE) -> None:
+                 watchlist_path: Path = WATCHLIST_FILE, exports_dir: Path = EXPORTS_DIR) -> None:
         super().__init__()
         self.graph = graph
         self.names = names or {}
         self.services = services or Services()
         self.index_name = index_name
         self.watchlist_path = watchlist_path
+        self.exports_dir = exports_dir
         self.positions = load_watchlist(watchlist_path)
         self.screen_hits: list[dict] = []
         self.screen_text = ""
@@ -347,9 +351,39 @@ class IndiaBloomApp(App):
             ("Toggle watchlist", "Add or remove the selected stock from the watchlist (a)", self.action_watch_toggle),
             ("Show all keys", "Open the key list (?)", self.action_help),
             ("Close the input box", "Close the search, screen or compare box (Esc)", self.action_close_search),
+            ("Export this view (CSV)", "Save the table on the right to data/exports (e)", self.action_export_view),
+            ("Export stock list (CSV)", "Save the stock list; on Watch, the watchlist with P&L (Ctrl+E)",
+             self.action_export_stocks),
         )
         for title, help_text, callback in actions:
             yield SystemCommand(title, help_text, callback)
+
+    def action_export_view(self) -> None:
+        """Save the table on the right pane to data/exports as CSV."""
+        if self.view in ("chart", "compare"):
+            self._show_status("Charts are text, not tables, so there is nothing to export here.")
+            return
+        self._export_table(self.query_one("#links", DataTable), self.view, self.selected or "")
+
+    def action_export_stocks(self) -> None:
+        """Save the stock list as CSV. On the Watch tab, save the watchlist with P&L instead."""
+        if self.tab == "watch":
+            prices = {r.ticker: r.last for r in self.stocks if r.last is not None}
+            rows = watchlist_rows(self.positions, prices)
+            path = write_csv(export_path("watchlist", directory=self.exports_dir),
+                             WATCHLIST_HEADERS, rows)
+            self._show_status(f"Exported {len(rows)} watched stocks with P&L to {path}")
+            return
+        self._export_table(self.query_one("#stocks", DataTable), f"stocks-{self.tab}", "")
+
+    def _export_table(self, table: DataTable, name: str, ticker: str) -> None:
+        if table.row_count == 0:
+            self._show_status(f"Nothing to export: {name} is empty.")
+            return
+        headers = [str(column.label) for column in table.columns.values()]
+        rows = [[str(value) for value in table.get_row_at(i)] for i in range(table.row_count)]
+        path = write_csv(export_path(name, ticker, directory=self.exports_dir), headers, rows)
+        self._show_status(f"Exported {len(rows)} rows to {path}")
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen(help_lines(self.BINDINGS)))
