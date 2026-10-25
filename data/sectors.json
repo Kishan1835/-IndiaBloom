@@ -1,0 +1,25 @@
+{
+  "IT": {
+    "industries": ["Information Technology"]
+  },
+  "Banks": {
+    "industries": ["Financial Services"],
+    "name_contains": ["Bank"]
+  },
+  "Manufacturing": {
+    "industries": [
+      "Capital Goods",
+      "Automobile and Auto Components",
+      "Chemicals",
+      "Metals & Mining",
+      "Consumer Durables",
+      "Construction Materials",
+      "Textiles",
+      "Fast Moving Consumer Goods"
+    ]
+  },
+  "Pharma": {
+    "industries": ["Healthcare"],
+    "note": "NSE's Healthcare industry includes hospitals as well as drug makers."
+  }
+}

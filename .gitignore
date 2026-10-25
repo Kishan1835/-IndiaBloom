@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Local caches and logs (rebuilt automatically)
+data/cache/
+data/ledger/daily.log
+data/reports/
+run.log
+err.log
+o.log
+e.log
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Never commit secrets
+.env
+*.pem
+*.key

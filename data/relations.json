@@ -1,0 +1,146 @@
+[
+  {
+    "source": "MU",
+    "target": "KAYNES.NS",
+    "relation": "thematic",
+    "confidence": "low",
+    "rationale": "Kaynes is an Indian electronics manufacturer with semiconductor packaging ambitions; Micron has announced an assembly and test facility in India, so the two share a theme but no confirmed supplier link is recorded here.",
+    "sources": []
+  },
+  {
+    "source": "MU",
+    "target": "CGPOWER.NS",
+    "relation": "thematic",
+    "confidence": "low",
+    "rationale": "CG Power has announced a semiconductor assembly and test venture; the link to Micron is thematic (Indian memory and chip packaging), not a verified business relationship.",
+    "sources": []
+  },
+  {
+    "source": "AAPL",
+    "target": "DIXON.NS",
+    "relation": "thematic",
+    "confidence": "low",
+    "rationale": "Dixon Technologies is a large Indian contract electronics manufacturer; Apple's supply chain in India includes contract manufacturers, but a direct Apple-Dixon contract is not recorded here.",
+    "sources": []
+  },
+  {
+    "source": "ACN",
+    "target": "INFY.NS",
+    "relation": "peer",
+    "confidence": "high",
+    "rationale": "Accenture and Infosys are global IT services peers competing for the same enterprise digital-transformation spend.",
+    "sources": []
+  },
+  {
+    "source": "ACN",
+    "target": "TCS.NS",
+    "relation": "peer",
+    "confidence": "high",
+    "rationale": "Accenture and TCS are global IT services peers competing for the same enterprise spend.",
+    "sources": []
+  },
+  {
+    "source": "ACN",
+    "target": "WIPRO.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Accenture and Wipro compete in the same global IT services market.",
+    "sources": []
+  },
+  {
+    "source": "ACN",
+    "target": "HCLTECH.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Accenture and HCLTech compete in global IT services and engineering services.",
+    "sources": []
+  },
+  {
+    "source": "MSFT",
+    "target": "INFY.NS",
+    "relation": "thematic",
+    "confidence": "low",
+    "rationale": "Indian IT services firms build and run workloads on Microsoft platforms; a demand exposure, not a disclosed contract.",
+    "sources": []
+  },
+  {
+    "source": "TCS.NS",
+    "target": "INFY.NS",
+    "relation": "peer",
+    "confidence": "high",
+    "rationale": "TCS and Infosys are the two largest Indian IT services firms and compete for the same large clients.",
+    "sources": []
+  },
+  {
+    "source": "TCS.NS",
+    "target": "WIPRO.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are large Indian IT services exporters competing for global enterprise contracts.",
+    "sources": []
+  },
+  {
+    "source": "TCS.NS",
+    "target": "HCLTECH.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are large Indian IT services exporters competing for global enterprise contracts.",
+    "sources": []
+  },
+  {
+    "source": "TCS.NS",
+    "target": "TECHM.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are Indian IT services exporters competing in telecom and enterprise digital work.",
+    "sources": []
+  },
+  {
+    "source": "INFY.NS",
+    "target": "WIPRO.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are large Indian IT services exporters competing for global enterprise contracts.",
+    "sources": []
+  },
+  {
+    "source": "INFY.NS",
+    "target": "HCLTECH.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are large Indian IT services exporters competing for global enterprise contracts.",
+    "sources": []
+  },
+  {
+    "source": "INFY.NS",
+    "target": "TECHM.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are Indian IT services exporters competing for global enterprise work.",
+    "sources": []
+  },
+  {
+    "source": "WIPRO.NS",
+    "target": "HCLTECH.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are Indian IT services exporters competing for global enterprise contracts.",
+    "sources": []
+  },
+  {
+    "source": "WIPRO.NS",
+    "target": "TECHM.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are Indian IT services exporters competing for global enterprise work.",
+    "sources": []
+  },
+  {
+    "source": "HCLTECH.NS",
+    "target": "TECHM.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Both are Indian IT services exporters competing for global enterprise work.",
+    "sources": []
+  }
+]

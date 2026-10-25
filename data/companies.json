@@ -1,0 +1,15 @@
+{
+  "MU": ["Micron"],
+  "ACN": ["Accenture"],
+  "AAPL": ["Apple"],
+  "MSFT": ["Microsoft"],
+  "NVDA": ["Nvidia"],
+  "INFY.NS": ["Infosys"],
+  "TCS.NS": ["TCS", "Tata Consultancy Services"],
+  "WIPRO.NS": ["Wipro"],
+  "HCLTECH.NS": ["HCLTech", "HCL Technologies"],
+  "TECHM.NS": ["Tech Mahindra"],
+  "KAYNES.NS": ["Kaynes Technology"],
+  "CGPOWER.NS": ["CG Power"],
+  "DIXON.NS": ["Dixon Technologies"]
+}
