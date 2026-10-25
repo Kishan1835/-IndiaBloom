@@ -14,6 +14,7 @@ Keys
   x screen the index on fundamentals (e.g. pe_trailing<20, roe>=15); Enter on a result opens it
   m top movers (largest day gainers and losers)
   h price chart with 1M, 6M and 1Y ranges (text chart from daily closes)
+  o compare up to 6 stocks on one chart, rebased to 100 (e.g. INFY.NS, TCS.NS, MU)
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -75,7 +76,7 @@ VIEW_LABELS = {
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
              "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart"}
-LIST_VIEWS = ("screen", "movers")  # right pane shows a list of stocks, not one stock's data
+LIST_VIEWS = ("screen", "movers", "compare")  # right pane shows a list or chart, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
 )
@@ -150,7 +151,8 @@ class IndiaBloomApp(App):
         [(key, f"tab('{name}')", TABS[name][0]) for key, name in TAB_NUMBER_KEYS.items()]
         + [(key, f"show('{view}')", VIEW_LABELS[view]) for key, view in VIEW_KEYS.items()]
         + [("q", "quit", "Quit"), ("ctrl+f", "search", "Search"), ("escape", "close_search", "Close search"),
-           ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("question_mark", "help", "Help")]
+           ("a", "watch_toggle", "Watch +/-"), ("x", "open_screen", "Screen"), ("o", "open_compare", "Compare"),
+           ("question_mark", "help", "Help")]
     )
 
     def __init__(self, graph: Graph, names: dict[str, tuple[str, ...]] | None = None,
@@ -166,6 +168,8 @@ class IndiaBloomApp(App):
         self.screen_hits: list[dict] = []
         self.screen_text = ""
         self.screen_total = 0
+        self._compare_lines: list[str] | None = None
+        self.compare_tickers: list[str] = []
         self.stocks: list[StockRow] = []
         self.company_names: dict[str, str] = {}  # ticker -> company name from the index list
         self.group: str | None = None
@@ -198,6 +202,8 @@ class IndiaBloomApp(App):
             with Vertical(id="right"):
                 yield Input(placeholder="Screen: conditions separated by commas, e.g. pe_trailing<20, roe>=15. Enter runs, Esc closes.",
                             id="screen-input")
+                yield Input(placeholder="Compare: tickers separated by commas, e.g. INFY.NS, TCS.NS, MU. Enter runs, Esc closes.",
+                            id="compare-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
                     for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart"):
@@ -210,6 +216,7 @@ class IndiaBloomApp(App):
     def on_mount(self) -> None:
         self.query_one("#search", Input).display = False
         self.query_one("#screen-input", Input).display = False
+        self.query_one("#compare-input", Input).display = False
         self.query_one("#stocks", DataTable).focus()  # keys must reach the view bindings, not the search box
         self._select_first_graph_node()
         self._load_market()
@@ -322,6 +329,61 @@ class IndiaBloomApp(App):
     def action_help(self) -> None:
         self.push_screen(HelpScreen(help_lines(self.BINDINGS)))
 
+    def action_open_compare(self) -> None:
+        box = self.query_one("#compare-input", Input)
+        box.display = True
+        box.value = ""
+        box.focus()
+
+    def _start_compare(self, text: str) -> None:
+        tickers: list[str] = []
+        for part in text.split(","):
+            code = part.strip().upper()
+            if code and code not in tickers:
+                tickers.append(code)
+        tickers = tickers[:6]  # more lines than this stops being readable
+        if len(tickers) < 2:
+            self._show_message("Compare needs at least two tickers, separated by commas.")
+            return
+        self.compare_tickers = tickers
+        self._compare_lines = None
+        self.view = "compare"
+        for name in VIEW_LABELS:
+            self.query_one(f"#btn-{name}", Button).variant = "default"
+        self._show_message(f"Loading 1 year of prices for {', '.join(tickers)}...")
+        self._load_compare(tickers)
+
+    @work(thread=True, exclusive=True, group="compare")
+    def _load_compare(self, tickers: list[str]) -> None:
+        from indiabloom.chart import compare_lines
+
+        try:
+            closes = self.services.prices(tickers, "1y")
+            lines = compare_lines(closes, tickers)
+        except Exception as exc:
+            lines = [f"compare failed: {exc}"]
+        self.call_from_thread(self._set_compare_lines, tickers, lines)
+
+    def _set_compare_lines(self, tickers: list[str], lines: list[str]) -> None:
+        if tickers != self.compare_tickers:
+            return  # a newer comparison replaced this one
+        self._compare_lines = lines
+        if self.view == "compare":
+            self._show_compare()
+
+    def _show_compare(self) -> None:
+        self.query_one("#summary", Static).update(
+            f"Compare: {', '.join(self.compare_tickers)}  |  rebased to 100")
+        if self._compare_lines is None:
+            self._show_message("Loading...")
+            return
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("COMPARE (1Y, rebased to 100)", key="compare")
+        for line in self._compare_lines:
+            table.add_row(line)
+        self.query_one("#hint", Static).update("Press o to compare other stocks.")
+
     def action_search(self) -> None:
         box = self.query_one("#search", Input)
         box.display = True
@@ -348,13 +410,19 @@ class IndiaBloomApp(App):
                     if priced else "No price data yet. Wait for the price download to finish.")
 
     def action_close_search(self) -> None:
-        for box_id in ("#search", "#screen-input"):
+        for box_id in ("#search", "#screen-input", "#compare-input"):
             box = self.query_one(box_id, Input)
             if box.display:
                 box.display = False
                 self.query_one("#stocks", DataTable).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "compare-input":
+            text = event.value.strip()
+            event.input.display = False
+            self.query_one("#links", DataTable).focus()
+            self._start_compare(text)
+            return
         if event.input.id == "screen-input":
             text = event.value.strip()
             event.input.display = False
@@ -473,6 +541,9 @@ class IndiaBloomApp(App):
     # ----- right pane ---------------------------------------------------------
 
     def _render(self) -> None:
+        if self.view == "compare":
+            self._show_compare()
+            return
         if self.view == "screen":
             self._show_screen_results()
             return

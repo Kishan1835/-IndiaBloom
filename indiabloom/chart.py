@@ -1,4 +1,8 @@
-"""Text price charts for the terminal: 1M, 6M and 1Y windows from daily closes.
+"""Text price charts for the terminal.
+
+Single stock: 1M, 6M and 1Y windows from daily closes.
+Compare: several stocks on one chart, each rebased to 100 at the first date
+they all share, so a stock priced at Rs 50 and one at Rs 5000 can be compared.
 
 Ranges are counted in trading days (about 21 per month, 126 per six months,
 252 per year), so holidays and weekends are skipped automatically.
@@ -6,26 +10,26 @@ Ranges are counted in trading days (about 21 per month, 126 per six months,
 
 from __future__ import annotations
 
+import pandas as pd
+
 RANGES = (("1M", 21), ("6M", 126), ("1Y", 252))
 LABEL_WIDTH = 12
+SYMBOLS = "*+o#%@"  # one plotting character per compared stock, in order
 
 
-def render_chart(values: list[float], width: int = 60, height: int = 8) -> list[str]:
-    """Line chart as text rows: one '*' per column at the close's height, high at top.
-
-    The series is sampled evenly to `width` columns. Each line starts with the
-    high and low price labels on the first and last rows.
-    """
-    if len(values) < 2 or width < 2 or height < 2:
-        return []
-    lo, hi = min(values), max(values)
+def _plot(series: list[tuple[str, list[float]]], width: int, height: int) -> list[str]:
+    """Draw one or more series on a shared grid. Later series overwrite earlier points."""
+    all_values = [v for _, values in series for v in values]
+    lo, hi = min(all_values), max(all_values)
     span = (hi - lo) or 1.0
-    last = len(values) - 1
     grid = [[" "] * width for _ in range(height)]
-    for col in range(width):
-        value = values[round(col * last / (width - 1))]
-        row = round((value - lo) / span * (height - 1))
-        grid[height - 1 - row][col] = "*"
+    for index, (_, values) in enumerate(series):
+        symbol = SYMBOLS[index % len(SYMBOLS)]
+        last = len(values) - 1
+        for col in range(width):
+            value = values[round(col * last / (width - 1))]
+            row = round((value - lo) / span * (height - 1))
+            grid[height - 1 - row][col] = symbol
     lines = []
     for r, cells in enumerate(grid):
         if r == 0:
@@ -36,6 +40,13 @@ def render_chart(values: list[float], width: int = 60, height: int = 8) -> list[
             label = ""
         lines.append(f"{label:>{LABEL_WIDTH - 2}} |" + "".join(cells))
     return lines
+
+
+def render_chart(values: list[float], width: int = 60, height: int = 8) -> list[str]:
+    """Line chart as text rows: one '*' per column at the close's height, high at top."""
+    if len(values) < 2 or width < 2 or height < 2:
+        return []
+    return _plot([("", values)], width, height)
 
 
 def range_summary(values: list[float]) -> str:
@@ -52,7 +63,7 @@ def chart_lines(closes: list[float], width: int = 60, height: int = 8) -> list[s
     closes must be oldest first. A window with fewer than two closes says so
     instead of drawing. A window longer than the history uses all of it, so a
     6M or 1Y header can cover less than the period its label names; the header
-    shows the start date values.
+    shows the start value.
     """
     out: list[str] = []
     for label, days in RANGES:
@@ -64,3 +75,39 @@ def chart_lines(closes: list[float], width: int = 60, height: int = 8) -> list[s
             out.extend(render_chart(window, width, height))
         out.append("")
     return out[:-1]  # drop the trailing blank line
+
+
+def rebase_common(closes: pd.DataFrame, tickers: list[str]) -> tuple[dict[str, list[float]], list[str]]:
+    """Closes for the tickers rebased to 100 on the first date all of them traded.
+
+    Returns (series by ticker, tickers missing from the download). Rows where any
+    chosen ticker has no close are dropped, so every series has the same dates.
+    """
+    present = [t for t in tickers if t in closes.columns]
+    missing = [t for t in tickers if t not in closes.columns]
+    if len(present) < 2:
+        return {}, missing
+    frame = closes[present].dropna()
+    if len(frame) < 2:
+        return {}, missing
+    rebased = frame / frame.iloc[0] * 100
+    return {t: [float(v) for v in rebased[t]] for t in present}, missing
+
+
+def compare_lines(closes: pd.DataFrame, tickers: list[str], width: int = 60, height: int = 12) -> list[str]:
+    """Rebased comparison chart with a legend: one line per stock showing its end value."""
+    series, missing = rebase_common(closes, tickers)
+    out: list[str] = []
+    if missing:
+        out.append(f"No price data for: {', '.join(missing)}")
+    if not series:
+        out.append("Need at least two stocks with price data over the same dates.")
+        return out
+    names = list(series)
+    out.extend(_plot([(n, series[n]) for n in names], width, height))
+    out.append("")
+    out.append("All start at 100 on the first common date.")
+    for index, name in enumerate(names):
+        end = series[name][-1]
+        out.append(f"  {SYMBOLS[index % len(SYMBOLS)]} {name:<16} end {end:7.1f}  ({end - 100:+.1f}%)")
+    return out
