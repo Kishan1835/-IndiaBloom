@@ -389,6 +389,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_scr.add_argument("--sort", default="market_cap_cr", help="field to sort by")
     p_scr.add_argument("--asc", action="store_true", help="sort ascending instead of descending")
     p_scr.add_argument("--top", type=int, default=None, help="show at most this many stocks")
+    p_al = sub.add_parser("alerts", help="price, move, deal and headline alerts for stocks")
+    al_sub = p_al.add_subparsers(dest="alerts_action", required=True)
+    p_add = al_sub.add_parser("add", help="add a rule for a stock")
+    p_add.add_argument("ticker", help="e.g. INFY.NS")
+    p_add.add_argument("--above", type=float, help="alert when the price is at or above this")
+    p_add.add_argument("--below", type=float, help="alert when the price is at or below this")
+    p_add.add_argument("--move-up", type=float, help="alert when the day change is at or above this percent")
+    p_add.add_argument("--move-down", type=float, help="alert when the day change is at or below this percent (negative)")
+    p_add.add_argument("--deals", action="store_true", help="alert on new NSE bulk or block deals")
+    p_add.add_argument("--news", action="store_true", help="alert on new headlines")
+    al_sub.add_parser("list", help="list rules")
+    p_rm = al_sub.add_parser("remove", help="remove a rule by id")
+    p_rm.add_argument("id", type=int)
+    p_check = al_sub.add_parser("check", help="check all rules once and log what fired")
+    p_check.add_argument("--refresh", action="store_true", help="also fetch today's NSE deals first")
+    p_watch = al_sub.add_parser("watch", help="check repeatedly while this terminal stays open")
+    p_watch.add_argument("--every", type=float, default=15, help="minutes between checks")
+    p_watch.add_argument("--refresh", action="store_true", help="also fetch today's NSE deals each time")
     return parser
 
 
@@ -421,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_watchlist(args)
         if args.command == "screen":
             return cmd_screen(args)
+        if args.command == "alerts":
+            return cmd_alerts(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -562,4 +582,142 @@ def cmd_screen(args: argparse.Namespace) -> int:
     if missing:
         print(f"{missing} stocks have no fundamentals cache yet; run: python -m indiabloom fundamentals --index {args.index}")
     _disclaimer()
+    return EXIT_OK
+
+
+def _alert_news_query(ticker: str) -> str:
+    from indiabloom.companies import DEFAULT_COMPANIES, load_companies
+
+    names = load_companies(DEFAULT_COMPANIES)
+    code = ticker.removesuffix(".NS")
+    return f"{names[ticker][0] if ticker in names else code} stock"
+
+
+def _run_alert_check(refresh: bool) -> list:
+    """Fetch prices, deals and headlines for every rule, evaluate, save state and log. Returns alerts."""
+    from datetime import date, datetime
+
+    from indiabloom.alerts import ALERTS_FILE, append_log, evaluate, load_rules, save_rules
+    from indiabloom.deals import DealsError, load_history, update_deals
+    from indiabloom.market import MarketDataError, download_bulk
+    from indiabloom.news import NewsError, fetch_news
+
+    rules, next_id = load_rules()
+    if not rules:
+        print("no alert rules yet. Add one: python -m indiabloom alerts add INFY.NS --above 1700")
+        return []
+    if refresh:
+        try:
+            update_deals()
+        except DealsError as exc:
+            print(f"deals refresh skipped: {exc}", file=sys.stderr)
+    tickers = sorted({r.ticker for r in rules})
+    quotes: dict = {}
+    try:
+        closes = download_bulk(tickers, period="5d")
+    except MarketDataError as exc:
+        print(f"price data unavailable, price alerts skipped: {exc}", file=sys.stderr)
+        closes = None
+    if closes is not None:
+        for t in tickers:
+            if t not in closes.columns:
+                continue
+            series = closes[t].dropna()
+            if len(series) == 0:
+                continue
+            last = float(series.iloc[-1])
+            change = (last / float(series.iloc[-2]) - 1) * 100 if len(series) >= 2 else None
+            quotes[t] = (last, change)
+    headlines: dict = {}
+    for r in rules:
+        if r.kind == "news" and r.ticker not in headlines:
+            try:
+                headlines[r.ticker] = [item.title for item in fetch_news(_alert_news_query(r.ticker))]
+            except NewsError as exc:
+                print(f"news unavailable for {r.ticker}: {exc}", file=sys.stderr)
+    alerts, rules = evaluate(rules, quotes, load_history(), headlines, date.today())
+    save_rules(rules, next_id)
+    append_log(alerts, datetime.now())
+    return alerts
+
+
+def cmd_alerts(args: argparse.Namespace) -> int:
+    from indiabloom.alerts import AlertError, Rule, deal_key, describe, load_rules, save_rules, validate
+    from indiabloom.deals import load_history
+    from indiabloom.news import NewsError, fetch_news
+
+    if args.alerts_action == "check":
+        alerts = _run_alert_check(args.refresh)
+        for a in alerts:
+            print(f"ALERT  {a.message}")
+        if not alerts:
+            print("no alerts fired")
+        return EXIT_OK
+
+    if args.alerts_action == "watch":
+        import time
+        from datetime import datetime
+
+        print(f"checking every {args.every} minutes; Ctrl+C to stop. Log: data/alerts/log.csv")
+        try:
+            while True:
+                for a in _run_alert_check(args.refresh):
+                    print(f"{datetime.now():%H:%M} ALERT  {a.message}", flush=True)
+                time.sleep(args.every * 60)
+        except KeyboardInterrupt:
+            print("stopped")
+        return EXIT_OK
+
+    rules, next_id = load_rules()
+    if args.alerts_action == "list":
+        if not rules:
+            print("no alert rules")
+            return EXIT_OK
+        _print_table(["ID", "TICKER", "RULE", "LAST PRICE ALERT"],
+                     [[str(r.id), r.ticker, describe(r), r.last_fired or "-"]
+                      for r in sorted(rules, key=lambda r: r.id)])
+        return EXIT_OK
+
+    if args.alerts_action == "remove":
+        remaining = [r for r in rules if r.id != args.id]
+        if len(remaining) == len(rules):
+            print(f"no rule with id {args.id}", file=sys.stderr)
+            return EXIT_USAGE
+        save_rules(remaining, next_id)
+        print(f"removed rule {args.id}")
+        return EXIT_OK
+
+    # add: exactly one rule type
+    choices = [
+        ("price_above", args.above), ("price_below", args.below),
+        ("move_above", args.move_up), ("move_below", args.move_down),
+        ("deal", True if args.deals else None), ("news", True if args.news else None),
+    ]
+    chosen = [(kind, value) for kind, value in choices if value is not None]
+    if len(chosen) != 1:
+        print("choose exactly one rule: --above, --below, --move-up, --move-down, --deals or --news",
+              file=sys.stderr)
+        return EXIT_USAGE
+    kind, value = chosen[0]
+    ticker = args.ticker.upper()
+    threshold = None if kind in ("deal", "news") else float(value)
+    try:
+        validate(kind, threshold)
+    except AlertError as exc:
+        print(f"alert error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    # Existing deals and headlines are marked seen, so only new ones alert later.
+    seen: list[str] = []
+    if kind == "deal":
+        code = ticker.removesuffix(".NS")
+        seen = [deal_key(d) for d in load_history() if d.symbol == code]
+    elif kind == "news":
+        try:
+            seen = [item.title for item in fetch_news(_alert_news_query(ticker))]
+        except NewsError as exc:
+            print(f"could not read current headlines ({exc}); the first check may alert on old news",
+                  file=sys.stderr)
+    rule = Rule(id=next_id, ticker=ticker, kind=kind, threshold=threshold, seen=seen[-200:])
+    save_rules([*rules, rule], next_id + 1)
+    print(f"added rule {rule.id}: {ticker} {describe(rule)}")
     return EXIT_OK

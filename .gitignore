@@ -27,3 +27,5 @@ desktop.ini
 data/fundamentals/
 data/watchlist.json
 data/exports/
+data/alerts.json
+data/alerts/
