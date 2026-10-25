@@ -13,6 +13,7 @@ Keys
   7 Watch (your watchlist)   a add or remove the selected stock from the watchlist   p position (P&L)
   x screen the index on fundamentals (e.g. pe_trailing<20, roe>=15); Enter on a result opens it
   m top movers (largest day gainers and losers)
+  h price chart with 1M, 6M and 1Y ranges (text chart from daily closes)
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -31,6 +32,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
 from indiabloom.companies import find_mentions
+from indiabloom.chart import chart_lines
 from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
 from indiabloom.graph import Graph
@@ -69,9 +71,10 @@ VIEW_LABELS = {
     "deals": "Deals",
     "position": "Position",
     "movers": "Movers",
+    "chart": "Chart",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
-             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers"}
+             "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart"}
 LIST_VIEWS = ("screen", "movers")  # right pane shows a list of stocks, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
@@ -197,7 +200,7 @@ class IndiaBloomApp(App):
                             id="screen-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -502,6 +505,9 @@ class IndiaBloomApp(App):
         elif self.view == "correlation":
             self._show_message("Loading prices and computing correlations...")
             self._load_correlation(ticker)
+        elif self.view == "chart":
+            self._show_message("Loading 1 year of prices...")
+            self._load_chart(ticker)
         else:
             self._show_message("Loading news...")
             self._load_news(ticker)
@@ -585,6 +591,9 @@ class IndiaBloomApp(App):
                         "first `python -m indiabloom deals` run.")
 
     def _populate(self, view: str, data: object) -> None:
+        if view == "chart":
+            self._show_chart(data)  # already rendered as text lines by the loader
+            return
         table = self.query_one("#links", DataTable)
         table.clear(columns=True)
         if view == "correlation":
@@ -645,6 +654,26 @@ class IndiaBloomApp(App):
             except Exception as exc:
                 data = _error(f"news failed: {exc}")
         self.call_from_thread(self._store_result, "news", ticker, data)
+
+    @work(thread=True, exclusive=True, group="detail")
+    def _load_chart(self, ticker: str) -> None:
+        try:
+            closes = self.services.prices([ticker], "1y")
+            if ticker in closes.columns:
+                values = [float(v) for v in closes[ticker].dropna()]
+            else:
+                values = []
+            data = chart_lines(values) if values else [f"No price data for {ticker}."]
+        except Exception as exc:
+            data = _error(f"chart failed: {exc}")
+        self.call_from_thread(self._store_result, "chart", ticker, data)
+
+    def _show_chart(self, lines: list[str]) -> None:
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("PRICE CHART (daily closes)", key="chart")
+        for line in lines:
+            table.add_row(line)
 
     def _store_result(self, view: str, ticker: str, data: object) -> None:
         if isinstance(data, _Error):
