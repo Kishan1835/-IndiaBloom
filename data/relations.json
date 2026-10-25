@@ -142,5 +142,116 @@
     "confidence": "medium",
     "rationale": "Both are Indian IT services exporters competing for global enterprise work.",
     "sources": []
+  },
+  {
+    "source": "KAYNES.NS",
+    "target": "AOSL",
+    "relation": "supplier",
+    "confidence": "high",
+    "rationale": "Kaynes Semicon's Sanand OSAT plant produces Intelligent Power Modules for Alpha and Omega Semiconductor, a US-listed customer, under a multi-year deal.",
+    "sources": [
+      "https://finance.yahoo.com/sectors/technology/articles/alpha-omega-semiconductor-announces-commencement-120000724.html",
+      "https://telecom.economictimes.indiatimes.com/news/devices/kaynes-semicon-eyes-january-2026-for-mass-production-at-sanand-osat/123709590"
+    ]
+  },
+  {
+    "source": "MU",
+    "target": "DELL",
+    "relation": "supplier",
+    "confidence": "medium",
+    "rationale": "Micron presented its first shipment of made-in-India memory modules to Dell Technologies at the opening of its Sanand assembly and test facility.",
+    "sources": [
+      "https://investors.micron.com/news/press-release/2026/Micron-Celebrates-Opening-of-Indias-First-Semiconductor-Assembly-and-Test-Facility-02-28-2026/default.aspx"
+    ]
+  },
+  {
+    "source": "LT.NS",
+    "target": "MU",
+    "relation": "supplier",
+    "confidence": "low",
+    "rationale": "Larsen & Toubro reportedly won the EPC contract for Phase 2 of Micron's Sanand plant. Source is a secondary blog citing reports; verify before relying on it.",
+    "sources": [
+      "https://biznewsbyjay.substack.com/p/how-a-135-crore-chip-arm-helped-l"
+    ]
+  },
+  {
+    "source": "HDFCBANK.NS",
+    "target": "ICICIBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "HDFCBANK.NS",
+    "target": "AXISBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "HDFCBANK.NS",
+    "target": "KOTAKBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "ICICIBANK.NS",
+    "target": "AXISBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "SBIN.NS",
+    "target": "HDFCBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "SBIN.NS",
+    "target": "ICICIBANK.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "SUNPHARMA.NS",
+    "target": "DRREDDY.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "SUNPHARMA.NS",
+    "target": "CIPLA.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "DRREDDY.NS",
+    "target": "CIPLA.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
+  },
+  {
+    "source": "DIVISLAB.NS",
+    "target": "DRREDDY.NS",
+    "relation": "peer",
+    "confidence": "medium",
+    "rationale": "Large-cap competitors in the same sector. Judgement, not from a filing; no source recorded.",
+    "sources": []
   }
 ]
