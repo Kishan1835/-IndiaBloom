@@ -1,11 +1,16 @@
-# Scheduled alert checks for watched stocks. Run it from Windows Task Scheduler.
+# Scheduled work for IndiaBloom, run from Windows Task Scheduler on this PC.
 #
-#   -Mode check   price, move and news alerts (run every 15 minutes on weekdays)
-#   -Mode daily   refresh NSE deals, then check all alerts (once a day, after 18:00 IST)
+#   -Mode check   alerts only: prices, moves, news (run every 15 minutes on weekdays)
+#   -Mode daily   after the Indian close: NSE deals, corporate events, then alerts.
+#                 On Sundays also refreshes fundamentals and the holdings history.
 #
-# Fired alerts are appended to data\alerts\log.csv. The check runs the same CLI as
-# `python -m indiabloom alerts check`, so the rules in data\alerts.json are the source.
-# Network failures are retried a few times, since the PC may still be connecting.
+# Why this runs locally: alert rules, the watchlist and the fundamentals/events
+# caches are personal or git-ignored, so GitHub cannot produce them. The GitHub
+# Action only maintains the ledger and the tracked deals history.
+#
+# Optional steps (deals, events, fundamentals) do not stop the run; the alerts step
+# does. Each step is retried a few times because the PC may still be connecting.
+# Output goes to data\alerts\runner.log.
 
 param(
     [ValidateSet("check", "daily")]
@@ -18,31 +23,39 @@ Set-Location (Join-Path $PSScriptRoot "..")
 $logFile = Join-Path $PSScriptRoot "..\data\alerts\runner.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $logFile) | Out-Null
 
-if ($Mode -eq "daily") {
-    $steps = @(
-        @("-m", "indiabloom", "alerts", "check", "--refresh")
-    )
-} else {
-    $steps = @(
-        @("-m", "indiabloom", "alerts", "check")
-    )
+function Write-Log([string]$Text) {
+    Add-Content -Path $logFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Text" -Encoding utf8
 }
 
-$stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-Add-Content -Path $logFile -Value "[$stamp] $Mode start"
-
-foreach ($command in $steps) {
-    $ok = $false
+# Runs one CLI command with retries. Returns $true on success.
+function Invoke-Step([string]$Name, [string[]]$CliArgs) {
+    Write-Log "$Name start"
     for ($try = 1; $try -le $Attempts; $try++) {
-        python @command 2>&1 | Tee-Object -FilePath $logFile -Append
-        if ($LASTEXITCODE -eq 0) { $ok = $true; break }
-        Add-Content -Path $logFile -Value "attempt $try failed, waiting $WaitSeconds s"
+        python -m indiabloom @CliArgs 2>&1 | Out-File -FilePath $logFile -Append -Encoding utf8
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "$Name ok"
+            return $true
+        }
+        Write-Log "$Name attempt $try failed (exit $LASTEXITCODE), waiting $WaitSeconds s"
         Start-Sleep -Seconds $WaitSeconds
     }
-    if (-not $ok) {
-        Add-Content -Path $logFile -Value "gave up after $Attempts attempts: $($command -join ' ')"
-        exit 1
-    }
+    Write-Log "$Name gave up after $Attempts attempts"
+    return $false
 }
 
-Add-Content -Path $logFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Mode done"
+if ($Mode -eq "check") {
+    $ok = Invoke-Step "alerts check" @("alerts", "check")
+    if (-not $ok) { exit 1 }
+    exit 0
+}
+
+# daily: order matters. Deals and events are refreshed first so the alert check sees them.
+Invoke-Step "deals" @("deals") | Out-Null
+Invoke-Step "events" @("events", "--index", "nifty500", "--sleep", "0.3") | Out-Null
+if ((Get-Date).DayOfWeek -eq "Sunday") {
+    Invoke-Step "fundamentals" @("fundamentals", "--index", "nifty500", "--sleep", "0.3") | Out-Null
+}
+$ok = Invoke-Step "alerts check" @("alerts", "check")
+Write-Log "daily done"
+if (-not $ok) { exit 1 }
+exit 0

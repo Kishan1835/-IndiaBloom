@@ -298,7 +298,9 @@ def cmd_fundamentals(args: argparse.Namespace) -> int:
     print(f"shareholding history: {append_holdings(points)} new points (see: python -m indiabloom holders TICKER)")
     print("Source: yfinance (unofficial). Ratios are as reported by Yahoo Finance.")
     _disclaimer()
-    return EXIT_OK if not report.failed else EXIT_DATA
+    if report.fetched == 0 and report.failed and report.skipped_fresh == 0:
+        return EXIT_DATA  # nothing usable: network or source failure
+    return EXIT_OK  # partial failures are listed above and retried on the next run
 
 
 def cmd_deals(args: argparse.Namespace) -> int:
