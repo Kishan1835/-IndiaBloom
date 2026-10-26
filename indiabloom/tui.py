@@ -33,6 +33,7 @@ from functools import partial
 from datetime import datetime
 from pathlib import Path
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
@@ -42,7 +43,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 from indiabloom.companies import find_mentions
 from indiabloom.alerts import ALERTS_FILE, LOG_FILE as ALERT_LOG_FILE, AlertError, apply_alert_text, describe, load_log
 from indiabloom.alerts import load_rules as load_alert_rules
-from indiabloom.chart import IST, chart_lines, is_market_open, live_lines
+from indiabloom.chart import IST, chart_lines, is_market_open, live_text
 from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
@@ -422,23 +423,24 @@ class IndiaBloomApp(App):
             "'TCS.NS news', 'remove 3'. Enter on a row opens that stock. Fired alerts are in data/alerts/log.csv.")
 
     def _refresh_live(self, ticker: str) -> None:
-        self._load_live(ticker)
+        size = self.query_one("#links", DataTable).size.width
+        self._load_live(ticker, max(30, size - 16) if size else 60)  # leave room for the axis labels
 
     @work(thread=True, exclusive=True, group="live")
-    def _load_live(self, ticker: str) -> None:
+    def _load_live(self, ticker: str, width: int) -> None:
         try:
             data = self.services.intraday(ticker)
             bars = [(ts.strftime("%H:%M"), float(v)) for ts, v in data.bars.items()]
-            lines = live_lines(bars, data.previous_close)
+            lines = live_text(bars, data.previous_close, width=width, height=12)
         except Exception as exc:  # network or data failure: say so instead of freezing
-            lines = [f"live data failed: {exc}"]
+            lines = [Text(f"live data failed: {exc}", style="red")]
         self.call_from_thread(self._store_live, ticker, lines)
 
-    def _store_live(self, ticker: str, lines: list[str]) -> None:
+    def _store_live(self, ticker: str, lines: list[Text]) -> None:
         if self.selected == ticker and self.view == "live":
             self._show_live(ticker, lines)
 
-    def _show_live(self, ticker: str, lines: list[str]) -> None:
+    def _show_live(self, ticker: str, lines: list[Text]) -> None:
         table = self.query_one("#links", DataTable)
         table.clear(columns=True)
         table.add_column("LIVE (5-minute bars, today)", key="live")
@@ -701,6 +703,9 @@ class IndiaBloomApp(App):
     # ----- right pane ---------------------------------------------------------
 
     def _render(self) -> None:
+        links = self.query_one("#links", DataTable)
+        links.cursor_type = "none" if self.view == "live" else "row"  # chart view: no row highlight
+        links.zebra_stripes = self.view != "live"
         if self.view == "alerts":
             self._show_alerts()
             return

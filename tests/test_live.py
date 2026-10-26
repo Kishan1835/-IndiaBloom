@@ -22,9 +22,25 @@ def test_market_hours_on_weekdays_only():
 
 def test_live_lines_header_and_change():
     lines = live_lines([("09:15", 100.0), ("09:20", 102.0)], previous_close=100.0, width=20, height=4)
-    assert lines[0].startswith("Last 102.00 at 09:20 IST")
-    assert "change +2.00% vs previous close 100.00" in lines[0]
+    assert "102.00" in lines[0] and "+2.00%" in lines[0]
+    assert "vs previous close 100.00" in lines[0]
+    assert "last bar 09:20 IST" in lines[1]
     assert lines[-1].strip().startswith("09:15") and lines[-1].strip().endswith("09:20")
+
+
+def test_live_text_colours_the_move():
+    from indiabloom.chart import live_text
+    up = live_text([("09:15", 100.0), ("09:20", 102.0)], 100.0, width=20, height=4)
+    down = live_text([("09:15", 100.0), ("09:20", 98.0)], 100.0, width=20, height=4)
+    assert "green" in str(up[0].spans[0].style)
+    assert "red" in str(down[0].spans[0].style)
+
+
+def test_live_chart_columns_are_coloured():
+    from indiabloom.chart import live_text
+    lines = live_text([("09:15", 99.0), ("09:20", 101.0)], 100.0, width=10, height=4)
+    styles = {str(span.style) for line in lines for span in line.spans}
+    assert "bold green" in styles and "bold red" in styles
 
 
 def test_live_lines_before_open():
@@ -63,7 +79,7 @@ def test_live_view_shows_todays_bars(tmp_path):
             assert app.view == "live"
             table = app.query_one("#links", DataTable)
             text = "\n".join(str(table.get_row_at(r)[0]) for r in range(table.row_count))
-            assert "Last 101.00 at 09:25 IST" in text
+            assert "101.00" in text and "09:25 IST" in text
 
     asyncio.run(run())
 

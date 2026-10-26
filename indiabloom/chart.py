@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 
 import pandas as pd
+from rich.text import Text
 
 IST = timezone(timedelta(hours=5, minutes=30))
 MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
@@ -118,28 +119,59 @@ def compare_lines(closes: pd.DataFrame, tickers: list[str], width: int = 60, hei
     return out
 
 
+def _styled_plot(values: list[float], width: int, height: int, reference: float) -> list[Text]:
+    """Chart rows where each column is green if its value is at or above `reference`, else red."""
+    lo, hi = min(values), max(values)
+    span = (hi - lo) or 1.0
+    last = len(values) - 1
+    cells = [[(" ", "")] * width for _ in range(height)]
+    for col in range(width):
+        value = values[round(col * last / (width - 1))]
+        row = round((value - lo) / span * (height - 1))
+        colour = "bold green" if value >= reference else "bold red"
+        cells[height - 1 - row][col] = ("*", colour)
+    rows: list[Text] = []
+    for r, cell_row in enumerate(cells):
+        label = f"{hi:,.1f}" if r == 0 else f"{lo:,.1f}" if r == height - 1 else ""
+        line = Text(f"{label:>{LABEL_WIDTH - 2}} |", style="dim")
+        for char, style in cell_row:
+            line.append(char, style=style)
+        rows.append(line)
+    return rows
+
+
 def is_market_open(now: datetime) -> bool:
     """True on weekdays between the Indian open and close (IST). Holidays are not known here."""
     local = now.astimezone(IST)
     return local.weekday() < 5 and MARKET_OPEN <= local.time() <= MARKET_CLOSE
 
 
-def live_lines(bars: list[tuple[str, float]], previous_close: float | None,
-               width: int = 60, height: int = 12) -> list[str]:
-    """Today's 5-minute bars as a chart, with a header of last price and change on the day.
+def live_text(bars: list[tuple[str, float]], previous_close: float | None,
+              width: int = 60, height: int = 12) -> list[Text]:
+    """Today's 5-minute bars as coloured text: price and day change on top, then the chart.
 
-    bars are (time label, close), oldest first. Fewer than two bars means the
-    session has not produced a chart yet.
+    Green means at or above the previous close, red means below it. bars are
+    (time label, close), oldest first. Fewer than two bars means no chart yet.
     """
     if len(bars) < 2:
-        return ["No intraday bars yet. The chart fills in after the 09:15 IST open."]
+        return [Text("No intraday bars yet. The chart fills in after the 09:15 IST open.", style="yellow")]
     times = [t for t, _ in bars]
     values = [v for _, v in bars]
     last = values[-1]
-    change = ""
     if previous_close:
-        change = f"  |  change {(last / previous_close - 1) * 100:+.2f}% vs previous close {previous_close:,.2f}"
-    header = (f"Last {last:,.2f} at {times[-1]} IST  |  high {max(values):,.2f}  low {min(values):,.2f}"
-              f"{change}")
+        pct = (last / previous_close - 1) * 100
+        colour = "bold green" if pct >= 0 else "bold red"
+        price_line = Text.assemble((f"{last:,.2f}", colour), "   ", (f"{pct:+.2f}%", colour),
+                                   f"   vs previous close {previous_close:,.2f}")
+    else:
+        price_line = Text(f"{last:,.2f}", style="bold")
+    detail = Text(f"last bar {times[-1]} IST   high {max(values):,.2f}   low {min(values):,.2f}", style="dim")
     axis = " " * LABEL_WIDTH + times[0] + " " * max(1, width - len(times[0]) - len(times[-1])) + times[-1]
-    return [header, ""] + render_chart(values, width, height) + [axis]
+    reference = previous_close if previous_close else values[0]
+    return [price_line, detail, Text("")] + _styled_plot(values, width, height, reference) + [Text(axis, style="dim")]
+
+
+def live_lines(bars: list[tuple[str, float]], previous_close: float | None,
+               width: int = 60, height: int = 12) -> list[str]:
+    """Plain-text version of live_text, for logs and tests."""
+    return [line.plain for line in live_text(bars, previous_close, width, height)]
