@@ -27,6 +27,19 @@ EXIT_OK, EXIT_DATA = 0, 3
 
 IST = timezone(timedelta(hours=5, minutes=30))  # India has no daylight saving time
 INDIAN_OPEN = time(9, 15)
+SCORE_AFTER = time(15, 45)  # a bit after the 15:30 close, so the last bar is final
+
+
+def drop_open_session(closes: pd.DataFrame, now: datetime) -> pd.DataFrame:
+    """Remove today's bar until the Indian session has closed.
+
+    During the session yfinance returns a partial bar for today. Scoring it would
+    grade a prediction on an incomplete move, so today's bar is dropped until
+    SCORE_AFTER IST.
+    """
+    if now.time() >= SCORE_AFTER:
+        return closes
+    return closes[closes.index.date < now.date()]
 
 
 def logging_window_open(target: date, now: datetime) -> bool:
@@ -113,6 +126,7 @@ def cmd_score_signals(args: argparse.Namespace) -> int:
 
     tickers = sorted({e.ticker for e in entries})
     closes = download_bulk(tickers, period="2y", use_cache=False)  # scoring always needs fresh prices
+    closes = drop_open_session(closes, datetime.now(IST))
     scored = score_entries(entries, closes)
     summary = summarize(scored)
 
