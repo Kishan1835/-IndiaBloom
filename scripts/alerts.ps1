@@ -23,6 +23,18 @@ Set-Location (Join-Path $PSScriptRoot "..")
 $logFile = Join-Path $PSScriptRoot "..\data\alerts\runner.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $logFile) | Out-Null
 
+function Test-HasRules {
+    # True when data\alerts.json holds at least one rule. A missing or unreadable file counts as no rules.
+    $rulesFile = Join-Path $PSScriptRoot "..\data\alerts.json"
+    if (-not (Test-Path $rulesFile)) { return $false }
+    try {
+        $rules = (Get-Content $rulesFile -Raw -Encoding utf8 | ConvertFrom-Json).rules
+        return ($null -ne $rules -and @($rules).Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
 function Write-Log([string]$Text) {
     Add-Content -Path $logFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Text" -Encoding utf8
 }
@@ -44,6 +56,7 @@ function Invoke-Step([string]$Name, [string[]]$CliArgs) {
 }
 
 if ($Mode -eq "check") {
+    if (-not (Test-HasRules)) { exit 0 }  # nothing to check: stay quiet and do not log
     $ok = Invoke-Step "alerts check" @("alerts", "check")
     if (-not $ok) { exit 1 }
     exit 0
@@ -55,7 +68,7 @@ Invoke-Step "events" @("events", "--index", "nifty500", "--sleep", "0.3") | Out-
 if ((Get-Date).DayOfWeek -eq "Sunday") {
     Invoke-Step "fundamentals" @("fundamentals", "--index", "nifty500", "--sleep", "0.3") | Out-Null
 }
-$ok = Invoke-Step "alerts check" @("alerts", "check")
+$ok = if (Test-HasRules) { Invoke-Step "alerts check" @("alerts", "check") } else { Write-Log "alerts check skipped: no rules"; $true }
 Write-Log "daily done"
 if (-not $ok) { exit 1 }
 exit 0
