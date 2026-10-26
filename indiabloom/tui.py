@@ -19,6 +19,7 @@ Keys
   ctrl+p command palette: pick any view or action by name
   e export the table on the right to CSV; ctrl+e exports the stock list (Watch tab: watchlist with P&L)
   l alerts: your rules and recent fired alerts; ctrl+l adds or removes a rule (e.g. 'INFY.NS above 1700', 'remove 3')
+  v live chart of today's 5-minute bars, refreshed every minute from 09:15 to 15:30 IST (Yahoo data, may lag)
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -29,6 +30,7 @@ Slow data loads in background threads, so the screen stays responsive.
 from __future__ import annotations
 
 from functools import partial
+from datetime import datetime
 from pathlib import Path
 
 from textual import work
@@ -40,7 +42,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 from indiabloom.companies import find_mentions
 from indiabloom.alerts import ALERTS_FILE, LOG_FILE as ALERT_LOG_FILE, AlertError, apply_alert_text, describe, load_log
 from indiabloom.alerts import load_rules as load_alert_rules
-from indiabloom.chart import chart_lines
+from indiabloom.chart import IST, chart_lines, is_market_open, live_lines
 from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
@@ -83,10 +85,11 @@ VIEW_LABELS = {
     "chart": "Chart",
     "events": "Events",
     "alerts": "Alerts",
+    "live": "Live chart",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
              "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart", "k": "events",
-             "l": "alerts"}
+             "l": "alerts", "v": "live"}
 LIST_VIEWS = ("screen", "movers", "compare", "alerts")  # right pane shows a list or chart, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
@@ -226,7 +229,7 @@ class IndiaBloomApp(App):
                             id="alert-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events", "alerts"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events", "alerts", "live"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -238,6 +241,7 @@ class IndiaBloomApp(App):
         self.query_one("#screen-input", Input).display = False
         self.query_one("#compare-input", Input).display = False
         self.query_one("#alert-input", Input).display = False
+        self.set_interval(60, self._live_tick)  # refreshes the live chart; does nothing outside market hours
         self.query_one("#stocks", DataTable).focus()  # keys must reach the view bindings, not the search box
         self._select_first_graph_node()
         self._load_market()
@@ -416,6 +420,37 @@ class IndiaBloomApp(App):
         self.query_one("#hint", Static).update(
             "ctrl+l adds or removes: 'INFY.NS above 1700', 'MU move_down -3', 'INFY.NS deals', "
             "'TCS.NS news', 'remove 3'. Enter on a row opens that stock. Fired alerts are in data/alerts/log.csv.")
+
+    def _refresh_live(self, ticker: str) -> None:
+        self._load_live(ticker)
+
+    @work(thread=True, exclusive=True, group="live")
+    def _load_live(self, ticker: str) -> None:
+        try:
+            data = self.services.intraday(ticker)
+            bars = [(ts.strftime("%H:%M"), float(v)) for ts, v in data.bars.items()]
+            lines = live_lines(bars, data.previous_close)
+        except Exception as exc:  # network or data failure: say so instead of freezing
+            lines = [f"live data failed: {exc}"]
+        self.call_from_thread(self._store_live, ticker, lines)
+
+    def _store_live(self, ticker: str, lines: list[str]) -> None:
+        if self.selected == ticker and self.view == "live":
+            self._show_live(ticker, lines)
+
+    def _show_live(self, ticker: str, lines: list[str]) -> None:
+        table = self.query_one("#links", DataTable)
+        table.clear(columns=True)
+        table.add_column("LIVE (5-minute bars, today)", key="live")
+        for line in lines:
+            table.add_row(line)
+        self.query_one("#summary", Static).update(f"{ticker}  |  live 5-minute chart")
+        self.query_one("#hint", Static).update(
+            f"Refreshes every minute from 09:15 to 15:30 IST on weekdays. Last update {datetime.now(IST):%H:%M:%S} IST.")
+
+    def _live_tick(self) -> None:
+        if self.view == "live" and self.selected and is_market_open(datetime.now(IST)):
+            self._refresh_live(self.selected)
 
     def action_export_view(self) -> None:
         """Save the table on the right pane to data/exports as CSV."""
@@ -688,6 +723,10 @@ class IndiaBloomApp(App):
         self.query_one("#hint", Static).update("")
         if self.view in GRAPH_VIEWS:
             self._show_graph_view(ticker)
+            return
+        if self.view == "live":
+            self._show_message("Loading today's 5-minute bars...")
+            self._refresh_live(ticker)
             return
         if self.view == "fundamentals":
             self._show_fundamentals(ticker)  # reads the local cache only; no network

@@ -170,3 +170,24 @@ def download_bulk(
         print(f"warning: {len(missing)} ticker(s) returned no data (e.g. {missing[0]})", file=sys.stderr)
     closes.to_csv(path, index_label="date")
     return closes
+
+@dataclass(frozen=True)
+class IntradayData:
+    bars: pd.Series  # 5-minute closes for the current session, index in IST
+    previous_close: float | None  # close before the current session, for the day change
+
+
+def fetch_intraday(ticker: str) -> IntradayData:
+    """Today's 5-minute closes and the previous daily close, from yfinance (unofficial, may lag)."""
+    import yfinance as yf
+
+    handle = yf.Ticker(ticker)
+    bars = handle.history(period="1d", interval="5m")
+    closes = bars["Close"].dropna() if "Close" in bars else pd.Series(dtype=float)
+    if len(closes) and closes.index.tz is not None:
+        closes = closes.copy()
+        closes.index = closes.index.tz_convert("Asia/Kolkata")
+    daily = handle.history(period="5d", interval="1d")
+    daily_closes = daily["Close"].dropna() if "Close" in daily else pd.Series(dtype=float)
+    previous = float(daily_closes.iloc[-2]) if len(daily_closes) >= 2 else None
+    return IntradayData(bars=closes, previous_close=previous)

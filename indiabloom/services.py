@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from indiabloom.market import Quote, download_bulk, fetch_closes, fetch_quote
+from indiabloom.market import IntradayData, Quote, download_bulk, fetch_closes, fetch_intraday, fetch_quote
 from indiabloom.news import NewsItem, fetch_news
 
 PriceFetcher = Callable[[list[str], str], pd.DataFrame]
 QuoteFetcher = Callable[[str], Quote | None]
 NewsSearch = Callable[[str], list[NewsItem]]
+IntradayFetcher = Callable[[str], IntradayData]
 
 
 def _default_prices(tickers: list[str], period: str) -> pd.DataFrame:
@@ -29,4 +30,5 @@ class Services:
     quote: QuoteFetcher = field(default=fetch_quote)
     news: NewsSearch = field(default=fetch_news)
     bulk: PriceFetcher = field(default=_default_bulk)
+    intraday: IntradayFetcher = field(default=fetch_intraday)
 

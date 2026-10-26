@@ -10,7 +10,12 @@ Ranges are counted in trading days (about 21 per month, 126 per six months,
 
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta, timezone
+
 import pandas as pd
+
+IST = timezone(timedelta(hours=5, minutes=30))
+MARKET_OPEN, MARKET_CLOSE = time(9, 15), time(15, 30)
 
 RANGES = (("1M", 21), ("6M", 126), ("1Y", 252))
 LABEL_WIDTH = 12
@@ -111,3 +116,30 @@ def compare_lines(closes: pd.DataFrame, tickers: list[str], width: int = 60, hei
         end = series[name][-1]
         out.append(f"  {SYMBOLS[index % len(SYMBOLS)]} {name:<16} end {end:7.1f}  ({end - 100:+.1f}%)")
     return out
+
+
+def is_market_open(now: datetime) -> bool:
+    """True on weekdays between the Indian open and close (IST). Holidays are not known here."""
+    local = now.astimezone(IST)
+    return local.weekday() < 5 and MARKET_OPEN <= local.time() <= MARKET_CLOSE
+
+
+def live_lines(bars: list[tuple[str, float]], previous_close: float | None,
+               width: int = 60, height: int = 12) -> list[str]:
+    """Today's 5-minute bars as a chart, with a header of last price and change on the day.
+
+    bars are (time label, close), oldest first. Fewer than two bars means the
+    session has not produced a chart yet.
+    """
+    if len(bars) < 2:
+        return ["No intraday bars yet. The chart fills in after the 09:15 IST open."]
+    times = [t for t, _ in bars]
+    values = [v for _, v in bars]
+    last = values[-1]
+    change = ""
+    if previous_close:
+        change = f"  |  change {(last / previous_close - 1) * 100:+.2f}% vs previous close {previous_close:,.2f}"
+    header = (f"Last {last:,.2f} at {times[-1]} IST  |  high {max(values):,.2f}  low {min(values):,.2f}"
+              f"{change}")
+    axis = " " * LABEL_WIDTH + times[0] + " " * max(1, width - len(times[0]) - len(times[-1])) + times[-1]
+    return [header, ""] + render_chart(values, width, height) + [axis]
