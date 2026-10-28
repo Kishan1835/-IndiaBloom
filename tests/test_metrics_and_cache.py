@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -57,6 +58,9 @@ def test_fetch_closes_refreshes_stale_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(market, "_download", _fake_download(calls))
     now = datetime(2026, 10, 25, 9, 0)
     market.fetch_closes(["INFY.NS"], "1y", cache_dir=tmp_path, now=now)
+    # the cache file's mtime is the real clock; pin it to the test's clock so age is measured correctly
+    cache_file = market._cache_path("INFY.NS", "1y", tmp_path)
+    os.utime(cache_file, (now.timestamp(), now.timestamp()))
     market.fetch_closes(["INFY.NS"], "1y", cache_dir=tmp_path, now=now + timedelta(days=2))
     assert calls == ["INFY.NS", "INFY.NS"]
 
