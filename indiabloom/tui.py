@@ -686,7 +686,14 @@ class IndiaBloomApp(App):
             return
 
         rules = load_rules(SECTORS_FILE)
-        rows = build_stock_list(constituents, closes, self.graph, rules, latest_us_t())
+        from indiabloom.fundamentals import load_snapshot
+
+        sectors = {}
+        for c in constituents:
+            snap = load_snapshot(c.ticker)
+            if snap and snap.get("sector"):
+                sectors[c.ticker] = snap["sector"]
+        rows = build_stock_list(constituents, closes, self.graph, rules, latest_us_t(), sectors)
         as_of = closes.index.max().date().isoformat() if len(closes.index) else "unknown"
         self.call_from_thread(self._set_stocks, rows, constituents, as_of)
 

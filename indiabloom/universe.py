@@ -67,6 +67,8 @@ def _cache_file(name: str, cache_dir: Path) -> Path:
 def load_index(name: str, cache_dir: Path = UNIVERSE_DIR, now: datetime | None = None,
                timeout: float = 20.0) -> list[Constituent]:
     """Constituents for an index, from a fresh cache or the NSE archive."""
+    if name == ALL_NAME:
+        return load_all_listed(cache_dir, now, timeout)
     if name not in INDEXES:
         raise UniverseError(f"unknown index '{name}'; choose one of {', '.join(INDEXES)}")
     current = now or datetime.now()
@@ -86,5 +88,52 @@ def load_index(name: str, cache_dir: Path = UNIVERSE_DIR, now: datetime | None =
         raise UniverseError(f"could not fetch {name} constituents: {exc}") from exc
 
     constituents = parse_constituents(text)  # validate before caching
+    path.write_text(text, encoding="utf-8")
+    return constituents
+
+ALL_NAME = "all"
+ALL_URL = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+ALL_MAX_AGE = timedelta(days=1)  # new listings appear daily, and the file is small
+
+
+def parse_all_listed(text: str) -> list[Constituent]:
+    """Every regular-series (EQ) stock in NSE's full equity list. Industry is not in this file."""
+    reader = csv.DictReader(io.StringIO(text))
+    headers = {h.strip(): h for h in (reader.fieldnames or [])}
+    for needed in ("SYMBOL", "NAME OF COMPANY", "SERIES"):
+        if needed not in headers:
+            raise UniverseError(f"equity list is missing column {needed}")
+    out: list[Constituent] = []
+    seen: set[str] = set()
+    for row in reader:
+        if (row.get(headers["SERIES"]) or "").strip().upper() != "EQ":
+            continue
+        symbol = (row.get(headers["SYMBOL"]) or "").strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        out.append(Constituent(symbol=symbol, ticker=f"{symbol}.NS",
+                               company=(row.get(headers["NAME OF COMPANY"]) or "").strip(), industry=""))
+    if not out:
+        raise UniverseError("equity list contained no EQ stocks")
+    return out
+
+
+def load_all_listed(cache_dir: Path = UNIVERSE_DIR, now: datetime | None = None,
+                    timeout: float = 30.0) -> list[Constituent]:
+    current = now or datetime.now()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{ALL_NAME}.csv"
+    if path.exists() and current - datetime.fromtimestamp(path.stat().st_mtime) <= ALL_MAX_AGE:
+        return parse_all_listed(path.read_text(encoding="utf-8-sig"))
+    request = urllib.request.Request(ALL_URL, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8-sig")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        if path.exists():  # a stale list beats no list
+            return parse_all_listed(path.read_text(encoding="utf-8-sig"))
+        raise UniverseError(f"could not fetch the full equity list: {exc}") from exc
+    constituents = parse_all_listed(text)  # validate before caching
     path.write_text(text, encoding="utf-8")
     return constituents

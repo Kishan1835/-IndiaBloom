@@ -19,6 +19,7 @@ from indiabloom.sectors import OTHER, SectorRule, classify
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "data" / "reports"
 US_GROUP = "US"
+YAHOO_GROUPS = {"Technology": "IT", "Healthcare": "Pharma"}
 
 
 @dataclass(frozen=True)
@@ -59,20 +60,35 @@ def price_change(closes: pd.DataFrame, ticker: str) -> tuple[float | None, float
     return last, (last / float(series.iloc[-2]) - 1.0) * 100.0
 
 
+def group_from_sector(sector: str | None, company: str) -> str:
+    """Tab group from a Yahoo sector when NSE gives no industry.
+
+    Technology and Healthcare map to the IT and Pharma tabs, and bank names to Banks.
+    Any other Yahoo sector (Energy, Utilities, Industrials...) becomes its own group.
+    """
+    if not sector:
+        return OTHER
+    if sector == "Financial Services":
+        return "Banks" if "bank" in company.lower() else "Financials"
+    return YAHOO_GROUPS.get(sector, sector)
+
+
 def build_stock_list(
     constituents: list,  # universe.Constituent objects
     closes: pd.DataFrame,
     graph: Graph,
     rules: list[SectorRule],
     us_t: dict[str, float],
+    sectors: dict[str, str] | None = None,  # ticker -> Yahoo sector, used when NSE gives no industry
 ) -> list[StockRow]:
+    sectors = sectors or {}
     rows: dict[str, StockRow] = {}
     for c in constituents:
         last, change = price_change(closes, c.ticker)
-        rows[c.ticker] = StockRow(
-            c.ticker, c.company, classify(c.company, c.industry, rules),
-            last, change, us_t.get(c.ticker),
-        )
+        group = classify(c.company, c.industry, rules)
+        if group == OTHER and c.ticker in sectors:
+            group = group_from_sector(sectors[c.ticker], c.company)
+        rows[c.ticker] = StockRow(c.ticker, c.company, group, last, change, us_t.get(c.ticker))
 
     for ticker in graph.nodes():
         if ticker in rows:

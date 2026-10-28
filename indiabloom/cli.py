@@ -1,4 +1,4 @@
-"""Command-line interface.
+﻿"""Command-line interface.
 
 Commands:
   relations  every recorded link for a stock
@@ -323,7 +323,7 @@ def cmd_ui(args: argparse.Namespace, graph: Graph) -> int:
     from indiabloom.tui import IndiaBloomApp
 
     names = load_companies(args.companies)
-    IndiaBloomApp(graph, names, Services()).run()
+    IndiaBloomApp(graph, names, Services(), index_name=getattr(args, "index", "nifty500")).run()
     return EXIT_OK
 
 
@@ -362,15 +362,19 @@ def build_parser() -> argparse.ArgumentParser:
                          help="headlines to read per company")
 
     sub.add_parser("ui", help="open the interactive terminal UI")
+    p_ui_idx = sub.choices["ui"]
+    p_ui_idx.add_argument("--index", default="nifty500",
+                          choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"],
+                          help="stock list: an index, or 'all' for every listed NSE equity")
 
     p_uni = sub.add_parser("universe", help="list constituents of a Nifty index")
     p_uni.add_argument("--index", default="nifty50",
-                       choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+                       choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
 
     p_us = sub.add_parser("universe-scan",
                           help="rank index stocks by lead-lag correlation with a leader")
     p_us.add_argument("--index", default="nifty500",
-                      choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+                      choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_us.add_argument("--leader", default="^GSPC",
                       help="leader ticker, e.g. ^GSPC (S&P 500), ^IXIC (Nasdaq), MU")
     p_us.add_argument("--period", default="2y")
@@ -383,12 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_peers = sub.add_parser("peers", help="compute same-industry statistical peers for an index")
     p_peers.add_argument("--index", default="nifty500",
-                         choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+                         choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_peers.add_argument("--top", type=int, default=5, help="peers per stock")
     p_peers.add_argument("--refresh", action="store_true", help="ignore the price cache")
     p_fund = sub.add_parser("fundamentals", help="fetch valuation and financial snapshots for an index")
     p_fund.add_argument("--index", default="nifty500",
-                        choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+                        choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_fund.add_argument("--sleep", type=float, default=0.5, help="seconds between requests")
     p_fund.add_argument("--refresh", action="store_true", help="refetch even if the cache is fresh")
     sub.add_parser("deals", help="fetch today's NSE bulk and block deals into the history")
@@ -399,7 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_wl.add_argument("--qty", type=float, default=None, help="number of shares")
     p_scr = sub.add_parser("screen", help="filter an index on cached fundamentals, e.g. --where 'roe>15'")
     p_scr.add_argument("--index", default="nifty500",
-                       choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+                       choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_scr.add_argument("--where", action="append", default=[],
                        help="condition such as pe_trailing<20, roe>=15, sector=bank (repeatable)")
     p_scr.add_argument("--sort", default="market_cap_cr", help="field to sort by")
@@ -424,11 +428,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--every", type=float, default=15, help="minutes between checks")
     p_watch.add_argument("--refresh", action="store_true", help="also fetch today's NSE deals each time")
     p_ev = sub.add_parser("events", help="fetch results and ex-dividend dates for an index (cached)")
-    p_ev.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_ev.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_ev.add_argument("--sleep", type=float, default=0.5, help="seconds between requests")
     p_ev.add_argument("--refresh", action="store_true", help="refetch even if the cache is fresh")
     p_cal = sub.add_parser("calendar", help="upcoming results and ex-dividend dates from the cache")
-    p_cal.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500"])
+    p_cal.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_cal.add_argument("--days", type=int, default=30, help="look-ahead window in days")
     p_cal.add_argument("--watch", action="store_true", help="only stocks on your watchlist")
     p_hold = sub.add_parser("holders", help="insider and institution percentage history for a stock")
