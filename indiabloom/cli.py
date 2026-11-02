@@ -470,6 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_cs.add_argument("value", choices=["under_review", "rejected"])
     p_cap = can_sub.add_parser("approve", help="move a candidate into the verified graph")
     p_cap.add_argument("id", type=int)
+    p_res = sub.add_parser("research", help="find relationship candidates from recent company news")
+    p_res.add_argument("ticker")
+    p_res.add_argument("--limit", type=int, default=20)
     return parser
 
 
@@ -516,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_jev_news(args)
         if args.command == "candidates":
             return cmd_candidates(args)
+        if args.command == "research":
+            return cmd_research(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -979,3 +984,24 @@ def cmd_candidates(args: argparse.Namespace) -> int:
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         print(f"candidate error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    from indiabloom.companies import load_companies
+    from indiabloom.research import discover_candidates
+
+    names = load_companies(args.companies)
+    ticker = args.ticker.upper()
+    company = names.get(ticker, (ticker.removesuffix(".NS"),))[0]
+    try:
+        items = fetch_news(f"{company} stock", limit=args.limit)
+        result = discover_candidates(ticker, items, names)
+    except NewsError as exc:
+        print(f"research error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    print(f"reviewed {result.headlines} headlines for {ticker}; added {result.candidates_added} candidate(s)")
+    for candidate in result.candidates:
+        print(f"  candidate {candidate.id}: {candidate.source} -> {candidate.target} "
+              f"{candidate.relation} ({candidate.status})")
+    print("Candidates are not verified. Review them with: python -m indiabloom candidates list")
+    return EXIT_OK
