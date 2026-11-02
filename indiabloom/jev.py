@@ -197,8 +197,9 @@ def load_config(env_path: str | None = ".env") -> JevConfig:
 class TypeSafeHeadlineClassifier:
     """Real Jev classifier using the official TypeSafe Python SDK."""
 
-    def __init__(self, config: JevConfig | None = None) -> None:
+    def __init__(self, config: JevConfig | None = None, batch_size: int = 25) -> None:
         self.config = config or load_config()
+        self.batch_size = max(1, batch_size)
         self._client = None
 
     def _get_client(self):
@@ -220,36 +221,38 @@ class TypeSafeHeadlineClassifier:
         from typesafe_sdk import Choice
 
         results: list[HeadlineClassification] = []
-        for item in items:
-            key = headline_key(item)
-            try:
-                response = self._get_client().system_one(
-                    state={"headline": item.title, "source": item.source},
-                    model=self.config.model,
-                    questions={
-                        "sentiment": Choice(
-                            instructions="What is the financial sentiment of this headline for the named company?",
-                            criteria={"positive": None, "negative": None, "neutral": None},
-                        ),
-                        "relevance": Choice(
-                            instructions="How relevant is this headline to a public company's stock price?",
-                            criteria={"high": None, "medium": None, "low": None},
-                        ),
-                    },
+        for start in range(0, len(items), self.batch_size):
+            batch = items[start:start + self.batch_size]
+            questions = {}
+            state = {"headlines": []}
+            for index, item in enumerate(batch):
+                state["headlines"].append({"id": index, "title": item.title, "source": item.source})
+                questions[f"sentiment_{index}"] = Choice(
+                    instructions=f"What is the financial sentiment of headline {index} for its named company?",
+                    criteria={"positive": None, "negative": None, "neutral": None},
                 )
-                sentiment_answer = response.choices["sentiment"]
-                relevance_answer = response.choices["relevance"]
-                confidence = min(float(getattr(sentiment_answer, "confidence", 0.0)),
-                                 float(getattr(relevance_answer, "confidence", 0.0)))
-                results.append(parse_decision({
-                    "headline_key": key,
-                    "sentiment": sentiment_answer.choice,
-                    "relevance": relevance_answer.choice,
-                    "confidence": confidence,
-                    "rationale": "Jev typed decision; Jev does not return reasoning text.",
-                }, expected_key=key, provider="jev", model=self.config.model))
+                questions[f"relevance_{index}"] = Choice(
+                    instructions=f"How relevant is headline {index} to a public company's stock price?",
+                    criteria={"high": None, "medium": None, "low": None},
+                )
+            try:
+                response = self._get_client().system_one(state=state, model=self.config.model, questions=questions)
+                for index, item in enumerate(batch):
+                    sentiment_answer = response.choices[f"sentiment_{index}"]
+                    relevance_answer = response.choices[f"relevance_{index}"]
+                    confidence = min(float(getattr(sentiment_answer, "confidence", 0.0)),
+                                     float(getattr(relevance_answer, "confidence", 0.0)))
+                    key = headline_key(item)
+                    results.append(parse_decision({
+                        "headline_key": key,
+                        "sentiment": sentiment_answer.choice,
+                        "relevance": relevance_answer.choice,
+                        "confidence": confidence,
+                        "rationale": "Jev typed decision; Jev does not return reasoning text.",
+                    }, expected_key=key, provider="jev", model=self.config.model))
             except Exception as exc:
-                raise JevError(f"Jev failed for headline '{item.title[:80]}': {exc}") from exc
+                sample = batch[0].title[:80] if batch else "empty batch"
+                raise JevError(f"Jev failed for batch starting with '{sample}': {exc}") from exc
         return results
 
     def close(self) -> None:

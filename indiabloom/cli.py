@@ -24,7 +24,7 @@ from indiabloom.analytics import (
     log_returns,
     same_day_correlation,
 )
-from indiabloom.companies import DEFAULT_COMPANIES, CompanyFileError, load_companies
+from indiabloom.companies import DEFAULT_COMPANIES, CompanyFileError, find_mentions, load_companies
 from indiabloom.graph import Graph, RelationValidationError, load_relations
 from indiabloom.market import MarketDataError, fetch_closes
 from indiabloom.news import NewsError, fetch_news, sentiment, sentiment_label
@@ -471,8 +471,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_cap = can_sub.add_parser("approve", help="move a candidate into the verified graph")
     p_cap.add_argument("id", type=int)
     p_res = sub.add_parser("research", help="find relationship candidates from recent company news")
-    p_res.add_argument("ticker")
-    p_res.add_argument("--limit", type=int, default=20)
+    p_res.add_argument("ticker", nargs="?", help="one ticker; omit it when using --index")
+    p_res.add_argument("--index", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
+    p_res.add_argument("--limit", type=int, default=5, help="headlines per stock")
+    p_res.add_argument("--batch-size", type=int, default=25, help="Jev headlines per API request")
+    p_res.add_argument("--jev", action="store_true", help="use Jev for shortlisted headlines")
     return parser
 
 
@@ -988,20 +991,47 @@ def cmd_candidates(args: argparse.Namespace) -> int:
 
 def cmd_research(args: argparse.Namespace) -> int:
     from indiabloom.companies import load_companies
-    from indiabloom.research import discover_candidates
+    from indiabloom.research import SUPPLY_WORDS, COMPETE_WORDS, discover_candidates
+    from indiabloom.universe import UniverseError, load_index
+    import re
 
     names = load_companies(args.companies)
-    ticker = args.ticker.upper()
-    company = names.get(ticker, (ticker.removesuffix(".NS"),))[0]
-    try:
-        items = fetch_news(f"{company} stock", limit=args.limit)
-        result = discover_candidates(ticker, items, names)
-    except NewsError as exc:
-        print(f"research error: {exc}", file=sys.stderr)
-        return EXIT_DATA
-    print(f"reviewed {result.headlines} headlines for {ticker}; added {result.candidates_added} candidate(s)")
-    for candidate in result.candidates:
-        print(f"  candidate {candidate.id}: {candidate.source} -> {candidate.target} "
-              f"{candidate.relation} ({candidate.status})")
+    if args.index:
+        try:
+            constituents = load_index(args.index)
+        except UniverseError as exc:
+            print(f"research error: {exc}", file=sys.stderr)
+            return EXIT_DATA
+        names = {**names, **{c.ticker: (c.company,) for c in constituents}}
+        tickers = [c.ticker for c in constituents]
+    elif args.ticker:
+        tickers = [args.ticker.upper()]
+    else:
+        print("give a ticker or --index", file=sys.stderr)
+        return EXIT_USAGE
+
+    classifier = None
+    if args.jev:
+        from indiabloom.jev import TypeSafeHeadlineClassifier
+        classifier = TypeSafeHeadlineClassifier(batch_size=args.batch_size)
+    total_headlines = shortlisted = added = 0
+    for ticker in tickers:
+        company = names.get(ticker, (ticker.removesuffix(".NS"),))[0]
+        try:
+            items = fetch_news(f"{company} stock", limit=args.limit)
+        except NewsError as exc:
+            print(f"{ticker}: news failed: {exc}", file=sys.stderr)
+            continue
+        total_headlines += len(items)
+        # Do not send every headline to Jev. Keep only headlines with a named
+        # counterpart and explicit relationship language.
+        selected = [item for item in items if
+                    (SUPPLY_WORDS.search(item.title) or COMPETE_WORDS.search(item.title)) and
+                    len(find_mentions(item.title, names) - {ticker}) > 0]
+        shortlisted += len(selected)
+        result = discover_candidates(ticker, selected, names, classifier=classifier)
+        added += result.candidates_added
+    print(f"reviewed {total_headlines} headlines across {len(tickers)} stock(s); "
+          f"shortlisted {shortlisted}; added {added} candidate(s)")
     print("Candidates are not verified. Review them with: python -m indiabloom candidates list")
     return EXIT_OK

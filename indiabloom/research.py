@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from indiabloom.candidates import CANDIDATES_FILE, Candidate, add_candidate, load_candidates
 from indiabloom.companies import find_mentions
+from indiabloom.jev import HeadlineClassifier, classify_with_fallback, headline_key
 from indiabloom.news import NewsItem
 
 SUPPLY_WORDS = re.compile(r"\b(supplier|supplies|supply|provides|manufactures for|contract manufacturer|customer|client|order from|procures from)\b", re.I)
@@ -34,7 +35,7 @@ def _relation_for(text: str) -> str | None:
 
 
 def discover_candidates(ticker: str, items: list[NewsItem], names: dict[str, tuple[str, ...]],
-                        candidate_path=None) -> ResearchResult:
+                        candidate_path=None, classifier: HeadlineClassifier | None = None) -> ResearchResult:
     """Find named counterparties in headlines and save review candidates.
 
     Direction is conservative and marked under_review. For supplier language, the
@@ -45,12 +46,17 @@ def discover_candidates(ticker: str, items: list[NewsItem], names: dict[str, tup
     existing, _ = load_candidates(candidate_path) if candidate_path else load_candidates()
     existing_keys = {(c.source, c.target, c.relation, tuple(c.sources)) for c in existing
                      if c.status != "rejected"}
+    classifications = {}
+    if classifier is not None:
+        results = classify_with_fallback(items, classifier)
+        classifications = {r.headline_key: r for r in results}
     added: list[Candidate] = []
     selected = ticker.upper()
     for item in items:
         mentioned = find_mentions(item.title, names) - {selected}
         relation = _relation_for(item.title)
-        if relation is None:
+        classification = classifications.get(headline_key(item))
+        if relation is None or (classification is not None and classification.relevance == "low"):
             continue
         for other in sorted(mentioned):
             if relation == "peer":
@@ -62,9 +68,11 @@ def discover_candidates(ticker: str, items: list[NewsItem], names: dict[str, tup
             key = (source, target, relation, (item.link,))
             if key in existing_keys:
                 continue
+            rationale = f"News headline suggests a {relation} relationship; verify the direction and company identity."
+            if classification is not None:
+                rationale += f" Jev relevance={classification.relevance}, confidence={classification.confidence:.2f}."
             candidate = add_candidate(
-                source, target, relation, "low",
-                f"News headline suggests a {relation} relationship; verify the direction and company identity.",
+                source, target, relation, "low", rationale,
                 [item.link] if item.link else [], "reputable_news", item.title,
                 candidate_path or CANDIDATES_FILE,
             )
