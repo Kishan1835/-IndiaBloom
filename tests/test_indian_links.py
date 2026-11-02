@@ -17,7 +17,8 @@ def test_rank_indian_links_sorts_by_absolute_correlation_and_keeps_sign():
     assert [l.other for l in links] == ["C.NS", "B.NS"]
     assert links[0].corr < -0.99 and links[1].corr > 0.99
     assert all(l.observations == 79 for l in links)
-    assert links[0].sector == "IT" and links[1].other_sector == "Auto"
+    assert links[0].sector == "IT" and links[0].other_sector == "Auto"
+    assert links[1].other_sector == "IT"
 
 
 def test_indian_links_require_shared_observations_and_ignore_us():
