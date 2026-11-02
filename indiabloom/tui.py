@@ -19,7 +19,7 @@ Keys
   ctrl+p command palette: pick any view or action by name
   e export the table on the right to CSV; ctrl+e exports the stock list (Watch tab: watchlist with P&L)
   l alerts: your rules and recent fired alerts; ctrl+l adds or removes a rule (e.g. 'INFY.NS above 1700', 'remove 3')
-  v live chart of today's 5-minute bars, refreshed every minute from 09:15 to 15:30 IST (Yahoo data, may lag)
+  i Indian links: price-based correlations with other NSE stocks (not business relationships)
   ? full key list (this panel is generated from the same bindings)
 
 The status line under the stock list shows loading progress: the index list,
@@ -49,6 +49,7 @@ from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
 from indiabloom.graph import Graph
+from indiabloom.indian_links import IndianLink, rank_indian_links
 from indiabloom.news import sentiment, sentiment_label
 from indiabloom.peers import load_peers
 from indiabloom.scanner import pair_metrics
@@ -88,10 +89,11 @@ VIEW_LABELS = {
     "events": "Events",
     "alerts": "Alerts",
     "live": "Live chart",
+    "indian": "Indian links",
 }
 VIEW_KEYS = {"c": "competitors", "s": "suppliers", "u": "customers", "r": "correlation", "n": "news",
              "f": "fundamentals", "d": "deals", "p": "position", "m": "movers", "h": "chart", "k": "events",
-             "l": "alerts", "v": "live"}
+             "l": "alerts", "v": "live", "i": "indian"}
 LIST_VIEWS = ("screen", "movers", "compare", "alerts")  # right pane shows a list or chart, not one stock's data
 FUNDAMENTALS_HINT = (
     "No fundamentals cached for {ticker}. Run: python -m indiabloom fundamentals --index {index}"
@@ -231,7 +233,7 @@ class IndiaBloomApp(App):
                             id="alert-input")
                 yield Static("Choose a stock on the left.", id="summary")
                 with Horizontal(id="buttons"):
-                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events", "alerts", "live"):
+                    for view in (*GRAPH_VIEWS, *DATA_VIEWS, "fundamentals", "deals", "position", "movers", "chart", "events", "alerts", "live", "indian"):
                         variant = "primary" if view == self.view else "default"
                         yield Button(VIEW_LABELS[view], id=f"btn-{view}", variant=variant)
                 yield DataTable(id="links", cursor_type="row", zebra_stripes=True)
@@ -737,6 +739,10 @@ class IndiaBloomApp(App):
         if self.view in GRAPH_VIEWS:
             self._show_graph_view(ticker)
             return
+        if self.view == "indian":
+            self._show_message("Loading Indian-to-Indian price relationships...")
+            self._load_indian_links(ticker)
+            return
         if self.view == "live":
             self._show_message("Loading today's 5-minute bars...")
             self._refresh_live(ticker)
@@ -878,6 +884,18 @@ class IndiaBloomApp(App):
             return
         table = self.query_one("#links", DataTable)
         table.clear(columns=True)
+        if view == "indian":
+            table.add_column("OTHER", key="other")
+            table.add_column("CORR", key="corr")
+            table.add_column("N", key="n")
+            table.add_column("SECTOR", key="sector")
+            table.add_column("OTHER SECTOR", key="other_sector")
+            for link in data:  # type: ignore[union-attr]
+                table.add_row(link.other, _fmt(link.corr), str(link.observations),
+                              link.sector, link.other_sector)
+            self.query_one("#hint", Static).update(
+                "Indian links are same-day price correlations, not supplier, customer or competitor claims.")
+            return
         if view == "correlation":
             table.add_column("OTHER", key="other")
             table.add_column("METHOD", key="method")
@@ -928,6 +946,23 @@ class IndiaBloomApp(App):
         return self.company_names.get(ticker)
 
     # ----- background loading -------------------------------------------------
+
+    @work(thread=True, exclusive=True, group="detail")
+    def _load_indian_links(self, ticker: str) -> None:
+        try:
+            from indiabloom.universe import load_index
+            constituents = load_index(self.index_name)
+            tickers = [c.ticker for c in constituents]
+            closes = self.services.bulk([ticker, *tickers], "2y")
+            sectors = {}
+            for c in constituents:
+                snap = load_snapshot(c.ticker)
+                if snap and snap.get("sector"):
+                    sectors[c.ticker] = snap["sector"]
+            data = rank_indian_links(ticker, closes, sectors)
+        except Exception as exc:
+            data = _error(f"Indian links failed: {exc}")
+        self.call_from_thread(self._store_result, "indian", ticker, data)
 
     @work(thread=True, exclusive=True, group="detail")
     def _load_correlation(self, ticker: str) -> None:
