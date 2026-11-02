@@ -473,6 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cam = can_sub.add_parser("approve-many", help="preview or approve selected candidate IDs")
     p_cam.add_argument("--ids", required=True, help="comma-separated IDs, e.g. 2,3,7")
     p_cam.add_argument("--yes", action="store_true", help="write the approved candidates into the verified graph")
+    p_res = sub.add_parser("research", help="find relationship candidates from recent company news")
     p_res.add_argument("ticker", nargs="?", help="one ticker; omit it when using --index")
     p_res.add_argument("--index", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_res.add_argument("--limit", type=int, default=5, help="headlines per stock")
