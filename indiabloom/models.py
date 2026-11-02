@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 RELATION_TYPES = frozenset({"supplier", "peer", "thematic"})
 DIRECTED_TYPES = frozenset({"supplier"})
 CONFIDENCE_LEVELS = frozenset({"low", "medium", "high"})
+EVIDENCE_STATUSES = frozenset({"candidate", "under_review", "verified", "stale", "rejected"})
+SOURCE_TYPES = frozenset({"official_filing", "company_release", "customer_release", "reputable_news", "industry_source", "secondary", "unknown"})
 CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.6, "low": 0.3}
 INDIAN_SUFFIXES = (".NS", ".BO")
 TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9\-]{0,9}(\.(NS|BO))?$")
@@ -33,6 +35,10 @@ class Relation:
     confidence: str
     rationale: str
     sources: tuple[str, ...] = field(default_factory=tuple)
+    status: str = "verified"
+    source_type: str = "unknown"
+    last_checked: str | None = None
+    evidence_text: str | None = None
 
     @property
     def weight(self) -> float:

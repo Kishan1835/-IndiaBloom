@@ -9,7 +9,9 @@ from typing import Any
 
 from indiabloom.models import (
     CONFIDENCE_LEVELS,
+    EVIDENCE_STATUSES,
     RELATION_TYPES,
+    SOURCE_TYPES,
     TICKER_PATTERN,
     Relation,
     is_indian,
@@ -51,6 +53,18 @@ def _parse_one(index: int, item: Any) -> Relation:
         raise RelationValidationError(
             f"item {index}: confidence '{item['confidence']}' not in {sorted(CONFIDENCE_LEVELS)}"
         )
+    status = item.get("status", "verified")
+    if status not in EVIDENCE_STATUSES:
+        raise RelationValidationError(f"item {index}: status '{status}' not in {sorted(EVIDENCE_STATUSES)}")
+    source_type = item.get("source_type", "unknown")
+    if source_type not in SOURCE_TYPES:
+        raise RelationValidationError(f"item {index}: source_type '{source_type}' not in {sorted(SOURCE_TYPES)}")
+    last_checked = item.get("last_checked")
+    if last_checked is not None and (not isinstance(last_checked, str) or not last_checked.strip()):
+        raise RelationValidationError(f"item {index}: last_checked must be a non-empty date string")
+    evidence_text = item.get("evidence_text")
+    if evidence_text is not None and not isinstance(evidence_text, str):
+        raise RelationValidationError(f"item {index}: evidence_text must be text")
     sources = item.get("sources", [])
     if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
         raise RelationValidationError(f"item {index}: sources must be a list of strings")
@@ -62,6 +76,10 @@ def _parse_one(index: int, item: Any) -> Relation:
         confidence=item["confidence"],
         rationale=item["rationale"].strip(),
         sources=tuple(sources),
+        status=status,
+        source_type=source_type,
+        last_checked=last_checked,
+        evidence_text=evidence_text.strip() if isinstance(evidence_text, str) else None,
     )
 
 
@@ -100,6 +118,10 @@ class Link:
     direction: str  # "supplies" (other supplies selected), "supplied-by", or "" for undirected
     confidence: str
     rationale: str
+    status: str
+    source_type: str
+    sources: tuple[str, ...]
+    evidence_text: str | None
 
 
 class Graph:
@@ -133,7 +155,8 @@ class Graph:
                 direction = "supplies"
             else:
                 direction = "supplied-by"
-            out.append(Link(other, rel.relation, direction, rel.confidence, rel.rationale))
+            out.append(Link(other, rel.relation, direction, rel.confidence, rel.rationale,
+                            rel.status, rel.source_type, rel.sources, rel.evidence_text))
         out.sort(key=lambda link: (link.relation, link.other))
         return out
 

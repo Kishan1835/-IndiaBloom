@@ -785,23 +785,30 @@ class IndiaBloomApp(App):
         table.add_column("TYPE", key="type")
         table.add_column("DIRECTION", key="direction")
         table.add_column("CONF", key="conf")
+        table.add_column("STATUS", key="status")
         table.add_column("RATIONALE", key="why")
         links = getattr(self.graph, self.view)(ticker)
         for link in links:
             table.add_row(link.other, link.relation, link.direction or "mutual",
-                          link.confidence, link.rationale)
+                          link.confidence, link.status, link.rationale)
         if self.view == "competitors":
             # statistical peers come from price history; label them so they are not
             # mistaken for recorded business competitors
             for peer in self.peers.get(ticker, []):
                 table.add_row(
-                    peer.peer, "stat-peer", "mutual", f"corr {peer.corr:.2f}",
+                    peer.peer, "stat-peer", "mutual", f"corr {peer.corr:.2f}", "generated",
                     f"same industry ({peer.industry}); prices move together, not a business link",
                 )
         if table.row_count == 0:
-            self.query_one("#hint", Static).update(
-                EMPTY_HINT.format(view=VIEW_LABELS[self.view].lower(), ticker=ticker)
-            )
+            if self.view == "suppliers":
+                message = (f"No sourced inbound suppliers recorded for {ticker}. "
+                           "If it supplies other companies, check Customers.")
+            elif self.view == "customers":
+                message = (f"No sourced outbound customers recorded for {ticker}. "
+                           "Price correlation does not prove a customer relationship.")
+            else:
+                message = EMPTY_HINT.format(view=VIEW_LABELS[self.view].lower(), ticker=ticker)
+            self.query_one("#hint", Static).update(message)
 
     def _show_fundamentals(self, ticker: str) -> None:
         snap = load_snapshot(ticker)
