@@ -437,6 +437,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("--watch", action="store_true", help="only stocks on your watchlist")
     p_hold = sub.add_parser("holders", help="insider and institution percentage history for a stock")
     p_hold.add_argument("ticker", help="e.g. INFY.NS")
+    p_bt = sub.add_parser("backtest", help="test price rules out of sample on an index")
+    p_bt.add_argument("--where", action="append", default=[],
+                      help="rule on vol_1y, ret_1y, ret_3m, drawdown_1y, e.g. 'vol_1y<40' (repeatable)")
+    p_bt.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
+    p_bt.add_argument("--top", type=int, default=20, help="most stocks to hold per test date")
+    p_bt.add_argument("--hold", type=int, default=21, help="holding period in trading days")
     return parser
 
 
@@ -477,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_calendar(args)
         if args.command == "holders":
             return cmd_holders(args)
+        if args.command == "backtest":
+            return cmd_backtest(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -838,5 +846,44 @@ def cmd_holders(args: argparse.Namespace) -> int:
         print(f"\n{first.date} to {last.date}: insiders {('-' if d_ins is None else f'{d_ins:+.2f} pts')}, "
               f"institutions {('-' if d_inst is None else f'{d_inst:+.2f} pts')}")
     print("Aggregate percentages from yfinance. They do not name the holders.")
+    _disclaimer()
+    return EXIT_OK
+
+
+def cmd_backtest(args: argparse.Namespace) -> int:
+    from indiabloom.backtest import BacktestError, backtest, parse_rule
+    from indiabloom.market import MarketDataError, download_bulk
+    from indiabloom.universe import UniverseError, load_index
+
+    if not args.where:
+        print("give at least one rule, e.g. --where 'vol_1y<40' --where 'ret_3m>0'", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        rules = [parse_rule(text) for text in args.where]
+        constituents = load_index(args.index)
+    except (BacktestError, UniverseError) as exc:
+        print(f"backtest error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        closes = download_bulk([c.ticker for c in constituents], period="2y")
+        result = backtest(closes, rules, hold_days=args.hold, top_n=args.top)
+    except (MarketDataError, BacktestError) as exc:
+        print(f"backtest error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+
+    print(f"rules: {' and '.join(args.where)}   universe: {args.index}   hold {args.hold} trading days, "
+          f"up to {args.top} stocks per test date")
+    if result.periods == 0:
+        print("no test dates had stocks passing these rules, so there is nothing to compare.")
+    else:
+        pct = lambda v: "-" if v is None else f"{v:+.2f}%"
+        print(f"test dates: {result.periods} (last 30% of the history, rebalanced monthly)")
+        print(f"average forward return, selected stocks : {pct(result.avg_selected)}")
+        print(f"average forward return, whole universe : {pct(result.avg_universe)}")
+        print(f"excess over universe                    : {pct(result.excess)}")
+        print(f"test dates where selection beat the universe median: "
+              f"{result.period_wins}/{result.periods} ({result.win_rate * 100:.0f}%)")
+        print("A rule near 50% or with small excess is no better than chance here.")
+    print("Limits: today's listed stocks only (survivorship bias), no costs, price rules only.")
     _disclaimer()
     return EXIT_OK
