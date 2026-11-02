@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -148,3 +149,103 @@ def cache_key(items: Iterable[NewsItem], provider: str, model: str) -> str:
     """Key for a future classification cache, stable across process restarts."""
     keys = sorted(headline_key(item) for item in items)
     return hashlib.sha256(json.dumps([provider, model, keys]).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class JevConfig:
+    api_key: str
+    model: str = "jev-latest"
+    base_url: str | None = None
+    timeout: float = 30.0
+
+
+def load_config(env_path: str | None = ".env") -> JevConfig:
+    """Read Jev config without printing or logging secrets.
+
+    Environment variables win. The lowercase `jev_api` name is accepted because
+    that is the key name currently used in this workspace's .env file.
+    """
+    values: dict[str, str] = {}
+    if env_path and os.path.exists(env_path):
+        for line in open(env_path, encoding="utf-8"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    def get(*names: str) -> str | None:
+        for name in names:
+            value = os.getenv(name) or values.get(name)
+            if value:
+                return value
+        return None
+    api_key = get("TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "JEV_API_KEY", "jev_api")
+    if not api_key:
+        raise JevError("missing Jev API key; set TYPESAFE_API_KEY or JEV_API_KEY in .env")
+    return JevConfig(api_key, get("JEV_MODEL", "TYPESAFE_MODEL") or "jev-latest",
+                     get("TYPESAFE_BASE_URL", "JEV_BASE_URL"),
+                     float(get("JEV_TIMEOUT") or "30"))
+
+
+class TypeSafeHeadlineClassifier:
+    """Real Jev classifier using the official TypeSafe Python SDK."""
+
+    def __init__(self, config: JevConfig | None = None) -> None:
+        self.config = config or load_config()
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                from typesafe_sdk import TypeSafeClient
+            except ImportError as exc:
+                raise JevError("install typesafe-sdk before using the Jev classifier") from exc
+            kwargs: dict[str, Any] = {"api_key": self.config.api_key, "model": self.config.model,
+                                      "timeout": self.config.timeout}
+            if self.config.base_url:
+                kwargs["base_url"] = self.config.base_url
+            self._client = TypeSafeClient(**kwargs)
+        return self._client
+
+    def classify(self, items: list[NewsItem]) -> list[HeadlineClassification]:
+        if not items:
+            return []
+        from typesafe_sdk import Choice
+
+        results: list[HeadlineClassification] = []
+        for item in items:
+            key = headline_key(item)
+            try:
+                response = self._get_client().system_one(
+                    state={"headline": item.title, "source": item.source},
+                    model=self.config.model,
+                    questions={
+                        "sentiment": Choice(
+                            instructions="What is the financial sentiment of this headline for the named company?",
+                            criteria={"positive": None, "negative": None, "neutral": None},
+                        ),
+                        "relevance": Choice(
+                            instructions="How relevant is this headline to a public company's stock price?",
+                            criteria={"high": None, "medium": None, "low": None},
+                        ),
+                    },
+                )
+                sentiment_answer = response.choices["sentiment"]
+                relevance_answer = response.choices["relevance"]
+                confidence = min(float(getattr(sentiment_answer, "confidence", 0.0)),
+                                 float(getattr(relevance_answer, "confidence", 0.0)))
+                results.append(parse_decision({
+                    "headline_key": key,
+                    "sentiment": sentiment_answer.choice,
+                    "relevance": relevance_answer.choice,
+                    "confidence": confidence,
+                    "rationale": "Jev typed decision; Jev does not return reasoning text.",
+                }, expected_key=key, provider="jev", model=self.config.model))
+            except Exception as exc:
+                raise JevError(f"Jev failed for headline '{item.title[:80]}': {exc}") from exc
+        return results
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None

@@ -443,6 +443,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--index", default="nifty500", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_bt.add_argument("--top", type=int, default=20, help="most stocks to hold per test date")
     p_bt.add_argument("--hold", type=int, default=21, help="holding period in trading days")
+    p_jev = sub.add_parser("jev-news", help="classify one company's headlines with Jev")
+    p_jev.add_argument("ticker")
+    p_jev.add_argument("--limit", type=int, default=5)
     return parser
 
 
@@ -485,6 +488,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_holders(args)
         if args.command == "backtest":
             return cmd_backtest(args)
+        if args.command == "jev-news":
+            return cmd_jev_news(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -885,5 +890,30 @@ def cmd_backtest(args: argparse.Namespace) -> int:
               f"{result.period_wins}/{result.periods} ({result.win_rate * 100:.0f}%)")
         print("A rule near 50% or with small excess is no better than chance here.")
     print("Limits: today's listed stocks only (survivorship bias), no costs, price rules only.")
+    _disclaimer()
+    return EXIT_OK
+
+
+def cmd_jev_news(args: argparse.Namespace) -> int:
+    from indiabloom.jev import JevError, TypeSafeHeadlineClassifier, classify_with_fallback
+    from indiabloom.news import fetch_news
+
+    names = load_companies(args.companies)
+    ticker = args.ticker.upper()
+    company = names.get(ticker, (ticker.removesuffix(".NS"),))[0]
+    try:
+        items = fetch_news(f"{company} stock", limit=args.limit)
+        results = TypeSafeHeadlineClassifier().classify(items)
+    except (JevError, NewsError) as exc:
+        print(f"Jev news error: {exc}", file=sys.stderr)
+        return EXIT_DATA
+    by_key = {r.headline_key: r for r in results}
+    from indiabloom.jev import headline_key
+    rows = []
+    for item in items:
+        r = by_key[headline_key(item)]
+        rows.append([r.status, r.sentiment, r.relevance, f"{r.confidence:.2f}", item.title])
+    _print_table(["STATUS", "SENT", "RELEVANCE", "CONF", "HEADLINE"], rows)
+    print("Jev classifies headlines; it does not recommend buys or sells.")
     _disclaimer()
     return EXIT_OK
