@@ -12,6 +12,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -452,6 +453,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_jev = sub.add_parser("jev-news", help="classify one company's headlines with Jev")
     p_jev.add_argument("ticker")
     p_jev.add_argument("--limit", type=int, default=5)
+    p_can = sub.add_parser("candidates", help="manage unverified relationship candidates")
+    can_sub = p_can.add_subparsers(dest="candidates_action", required=True)
+    can_sub.add_parser("list", help="list candidates")
+    p_ca = can_sub.add_parser("add", help="add a candidate for review")
+    p_ca.add_argument("source")
+    p_ca.add_argument("target")
+    p_ca.add_argument("relation", choices=["supplier", "peer", "thematic"])
+    p_ca.add_argument("--confidence", choices=["low", "medium", "high"], default="low")
+    p_ca.add_argument("--rationale", required=True)
+    p_ca.add_argument("--source-url", action="append", default=[])
+    p_ca.add_argument("--source-type", default="unknown")
+    p_ca.add_argument("--evidence")
+    p_cs = can_sub.add_parser("status", help="change a candidate status")
+    p_cs.add_argument("id", type=int)
+    p_cs.add_argument("value", choices=["under_review", "rejected"])
+    p_cap = can_sub.add_parser("approve", help="move a candidate into the verified graph")
+    p_cap.add_argument("id", type=int)
     return parser
 
 
@@ -496,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_backtest(args)
         if args.command == "jev-news":
             return cmd_jev_news(args)
+        if args.command == "candidates":
+            return cmd_candidates(args)
         graph = Graph(load_relations(args.relations))
         if args.command == "relations":
             return cmd_relations(args, graph)
@@ -923,3 +943,39 @@ def cmd_jev_news(args: argparse.Namespace) -> int:
     print("Jev classifies headlines; it does not recommend buys or sells.")
     _disclaimer()
     return EXIT_OK
+
+
+def cmd_candidates(args: argparse.Namespace) -> int:
+    from indiabloom.candidates import (
+        CANDIDATES_FILE, RELATIONS_FILE, add_candidate, approve_candidate,
+        load_candidates, update_status,
+    )
+
+    try:
+        if args.candidates_action == "list":
+            rows, _ = load_candidates()
+            if not rows:
+                print("no relationship candidates")
+                return EXIT_OK
+            _print_table(["ID", "SOURCE", "TARGET", "TYPE", "CONF", "STATUS", "RATIONALE"], [
+                [str(r.id), r.source, r.target, r.relation, r.confidence, r.status, r.rationale]
+                for r in rows
+            ])
+            print(f"\nCandidate file: {CANDIDATES_FILE}")
+            return EXIT_OK
+        if args.candidates_action == "add":
+            row = add_candidate(args.source, args.target, args.relation, args.confidence,
+                                args.rationale, args.source_url, args.source_type, args.evidence)
+            print(f"added candidate {row.id}: {row.source} -> {row.target} {row.relation}")
+            return EXIT_OK
+        if args.candidates_action == "status":
+            row = update_status(args.id, args.value)
+            print(f"candidate {row.id}: {row.status}")
+            return EXIT_OK
+        row = approve_candidate(args.id, RELATIONS_FILE)
+        print(f"approved candidate {row.id}: {row.source} -> {row.target} {row.relation}")
+        print("Reload the UI to see the verified relationship.")
+        return EXIT_OK
+    except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        print(f"candidate error: {exc}", file=sys.stderr)
+        return EXIT_USAGE

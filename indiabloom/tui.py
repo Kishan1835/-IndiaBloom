@@ -43,6 +43,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 from indiabloom.companies import find_mentions
 from indiabloom.alerts import ALERTS_FILE, LOG_FILE as ALERT_LOG_FILE, AlertError, apply_alert_text, describe, load_log
 from indiabloom.alerts import load_rules as load_alert_rules
+from indiabloom.candidates import candidates_for, load_candidates
 from indiabloom.chart import IST, chart_lines, is_market_open, live_text
 from indiabloom.jev import ClassifiedNews, classify_with_fallback, headline_key
 from indiabloom.deals import deals_for, load_history as load_deals
@@ -800,7 +801,13 @@ class IndiaBloomApp(App):
                     f"same industry ({peer.industry}); prices move together, not a business link",
                 )
         if table.row_count == 0:
-            if self.view == "suppliers":
+            rows, _ = load_candidates()
+            pending = [r for r in candidates_for(ticker, rows) if r.status in ("candidate", "under_review")]
+            if self.view in ("suppliers", "customers") and pending:
+                direction = "inbound supplier" if self.view == "suppliers" else "outbound customer"
+                message = (f"No verified {direction} links. {len(pending)} relationship candidate(s) "
+                           "are under review; run `python -m indiabloom candidates list`.")
+            elif self.view == "suppliers":
                 message = (f"No sourced inbound suppliers recorded for {ticker}. "
                            "If it supplies other companies, check Customers.")
             elif self.view == "customers":
