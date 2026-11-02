@@ -144,7 +144,8 @@ def classify_with_fallback(items: list[NewsItem], classifier: HeadlineClassifier
     if classifier is None:
         return LocalHeadlineClassifier().classify(items)
     try:
-        return classifier.classify(items)
+        result = classifier.classify(items) if hasattr(classifier, "classify") else classifier(items)  # type: ignore[operator]
+        return result
     except Exception:
         if strict:
             raise
