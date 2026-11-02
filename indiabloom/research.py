@@ -15,8 +15,9 @@ from indiabloom.companies import find_mentions
 from indiabloom.jev import HeadlineClassifier, classify_with_fallback, headline_key
 from indiabloom.news import NewsItem
 
-SUPPLY_WORDS = re.compile(r"\b(supplier|supplies|supply|provides|manufactures for|contract manufacturer|customer|client|order from|procures from)\b", re.I)
+SUPPLY_WORDS = re.compile(r"\b(supplier|supplies|supply|provides|manufactures for|contract manufacturer|customer|client|order from|procures from|vendor|subcontractor)\b", re.I)
 COMPETE_WORDS = re.compile(r"\b(competes? with|competitor|rival|peers? with)\b", re.I)
+RELATION_WORDS = re.compile(r"\b(partnership|agreement|contract|collaboration|joint venture|deal|order|customer|client|supplier|vendor|competitor|rival|peer|manufactures for|provides)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -31,11 +32,14 @@ def _relation_for(text: str) -> str | None:
         return "peer"
     if SUPPLY_WORDS.search(text):
         return "supplier"
+    if RELATION_WORDS.search(text):
+        return "thematic"  # partnership/agreement/order needs human direction review
     return None
 
 
 def discover_candidates(ticker: str, items: list[NewsItem], names: dict[str, tuple[str, ...]],
-                        candidate_path=None, classifier: HeadlineClassifier | None = None) -> ResearchResult:
+                        candidate_path=None, classifier: HeadlineClassifier | None = None,
+                        broad: bool = False) -> ResearchResult:
     """Find named counterparties in headlines and save review candidates.
 
     Direction is conservative and marked under_review. For supplier language, the
@@ -54,7 +58,7 @@ def discover_candidates(ticker: str, items: list[NewsItem], names: dict[str, tup
     selected = ticker.upper()
     for item in items:
         mentioned = find_mentions(item.title, names) - {selected}
-        relation = _relation_for(item.title)
+        relation = _relation_for(item.title) or ("thematic" if broad else None)
         classification = classifications.get(headline_key(item))
         if relation is None or (classification is not None and classification.relevance == "low"):
             continue

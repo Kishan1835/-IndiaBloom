@@ -29,3 +29,11 @@ def test_research_dedupes_same_source_headline(tmp_path):
     first = discover_candidates("A.NS", [item], names, path)
     second = discover_candidates("A.NS", [item], names, path)
     assert first.candidates_added == 1 and second.candidates_added == 0
+
+
+def test_broad_mode_turns_named_comention_into_thematic_candidate(tmp_path):
+    names = {"A.NS": ("Alpha",), "B.NS": ("Beta",)}
+    item = NewsItem("Alpha and Beta discuss a market collaboration", "https://example.test/4", None, "Test")
+    result = discover_candidates("A.NS", [item], names, tmp_path / "candidates.json", broad=True)
+    assert result.candidates_added == 1
+    assert result.candidates[0].relation == "thematic"

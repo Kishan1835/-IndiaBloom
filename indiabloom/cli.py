@@ -476,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_res.add_argument("--limit", type=int, default=5, help="headlines per stock")
     p_res.add_argument("--batch-size", type=int, default=25, help="Jev headlines per API request")
     p_res.add_argument("--jev", action="store_true", help="use Jev for shortlisted headlines")
+    p_res.add_argument("--broad", action="store_true",
+                       help="also review company co-mentions as thematic candidates; higher false-positive rate")
     return parser
 
 
@@ -990,11 +992,9 @@ def cmd_candidates(args: argparse.Namespace) -> int:
 
 
 def cmd_research(args: argparse.Namespace) -> int:
-    from indiabloom.companies import load_companies
-    from indiabloom.research import SUPPLY_WORDS, COMPETE_WORDS, discover_candidates
-    from indiabloom.universe import UniverseError, load_index
     import re
-
+    from indiabloom.research import RELATION_WORDS, discover_candidates
+    from indiabloom.universe import UniverseError, load_index
     names = load_companies(args.companies)
     if args.index:
         try:
@@ -1002,7 +1002,16 @@ def cmd_research(args: argparse.Namespace) -> int:
         except UniverseError as exc:
             print(f"research error: {exc}", file=sys.stderr)
             return EXIT_DATA
-        names = {**names, **{c.ticker: (c.company,) for c in constituents}}
+        # News commonly uses short company names rather than the NSE legal name.
+        enriched = dict(names)
+        for c in constituents:
+            aliases = {c.company, c.symbol}
+            short = re.sub(r"\b(LIMITED|LTD|CORPORATION|CORP|COMPANY|CO)\b", "", c.company,
+                           flags=re.I).strip(" ,")
+            if short:
+                aliases.add(short)
+            enriched[c.ticker] = tuple(aliases)
+        names = enriched
         tickers = [c.ticker for c in constituents]
     elif args.ticker:
         tickers = [args.ticker.upper()]
@@ -1026,10 +1035,10 @@ def cmd_research(args: argparse.Namespace) -> int:
         # Do not send every headline to Jev. Keep only headlines with a named
         # counterpart and explicit relationship language.
         selected = [item for item in items if
-                    (SUPPLY_WORDS.search(item.title) or COMPETE_WORDS.search(item.title)) and
+                    (args.broad or RELATION_WORDS.search(item.title)) and
                     len(find_mentions(item.title, names) - {ticker}) > 0]
         shortlisted += len(selected)
-        result = discover_candidates(ticker, selected, names, classifier=classifier)
+        result = discover_candidates(ticker, selected, names, classifier=classifier, broad=args.broad)
         added += result.candidates_added
     print(f"reviewed {total_headlines} headlines across {len(tickers)} stock(s); "
           f"shortlisted {shortlisted}; added {added} candidate(s)")
