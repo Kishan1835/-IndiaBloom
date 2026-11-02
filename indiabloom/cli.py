@@ -470,7 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_cs.add_argument("value", choices=["under_review", "rejected"])
     p_cap = can_sub.add_parser("approve", help="move a candidate into the verified graph")
     p_cap.add_argument("id", type=int)
-    p_res = sub.add_parser("research", help="find relationship candidates from recent company news")
+    p_cam = can_sub.add_parser("approve-many", help="preview or approve selected candidate IDs")
+    p_cam.add_argument("--ids", required=True, help="comma-separated IDs, e.g. 2,3,7")
+    p_cam.add_argument("--yes", action="store_true", help="write the approved candidates into the verified graph")
     p_res.add_argument("ticker", nargs="?", help="one ticker; omit it when using --index")
     p_res.add_argument("--index", choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"])
     p_res.add_argument("--limit", type=int, default=5, help="headlines per stock")
@@ -981,6 +983,24 @@ def cmd_candidates(args: argparse.Namespace) -> int:
         if args.candidates_action == "status":
             row = update_status(args.id, args.value)
             print(f"candidate {row.id}: {row.status}")
+            return EXIT_OK
+        if args.candidates_action == "approve-many":
+            from indiabloom.candidates import approve_many
+            ids = [int(value.strip()) for value in args.ids.split(",") if value.strip()]
+            rows, _ = load_candidates()
+            selected = [next((r for r in rows if r.id == candidate_id), None) for candidate_id in ids]
+            if any(row is None for row in selected):
+                missing = [str(candidate_id) for candidate_id, row in zip(ids, selected) if row is None]
+                raise KeyError(f"no candidate with id {', '.join(missing)}")
+            print("Candidates selected:")
+            for row in selected:
+                print(f"  {row.id}: {row.source} -> {row.target} {row.relation} "
+                      f"({row.confidence}, {row.status})")
+            if not args.yes:
+                print("Preview only. Add --yes to approve these candidates.")
+                return EXIT_OK
+            approved = approve_many(ids, RELATIONS_FILE)
+            print(f"approved {len(approved)} candidate(s)")
             return EXIT_OK
         row = approve_candidate(args.id, RELATIONS_FILE)
         print(f"approved candidate {row.id}: {row.source} -> {row.target} {row.relation}")
