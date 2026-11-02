@@ -42,6 +42,12 @@ class HeadlineClassification:
     model: str = "heuristic"
 
 
+@dataclass(frozen=True)
+class ClassifiedNews:
+    items: list[NewsItem]
+    classifications: dict[str, HeadlineClassification]
+
+
 class HeadlineClassifier(Protocol):
     def classify(self, items: list[NewsItem]) -> list[HeadlineClassification]: ...
 

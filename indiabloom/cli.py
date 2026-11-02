@@ -323,7 +323,11 @@ def cmd_ui(args: argparse.Namespace, graph: Graph) -> int:
     from indiabloom.tui import IndiaBloomApp
 
     names = load_companies(args.companies)
-    IndiaBloomApp(graph, names, Services(), index_name=getattr(args, "index", "nifty500")).run()
+    services = Services()
+    if getattr(args, "jev", False):
+        from indiabloom.jev import TypeSafeHeadlineClassifier
+        services.classifier = TypeSafeHeadlineClassifier()
+    IndiaBloomApp(graph, names, services, index_name=getattr(args, "index", "nifty500")).run()
     return EXIT_OK
 
 
@@ -366,6 +370,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui_idx.add_argument("--index", default="nifty500",
                           choices=["nifty50", "nifty100", "nifty200", "nifty500", "all"],
                           help="stock list: an index, or 'all' for every listed NSE equity")
+    p_ui_idx.add_argument("--jev", action="store_true",
+                          help="classify News headlines with Jev; sends headline text only and may incur API cost")
 
     p_uni = sub.add_parser("universe", help="list constituents of a Nifty index")
     p_uni.add_argument("--index", default="nifty50",

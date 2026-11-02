@@ -44,6 +44,7 @@ from indiabloom.companies import find_mentions
 from indiabloom.alerts import ALERTS_FILE, LOG_FILE as ALERT_LOG_FILE, AlertError, apply_alert_text, describe, load_log
 from indiabloom.alerts import load_rules as load_alert_rules
 from indiabloom.chart import IST, chart_lines, is_market_open, live_text
+from indiabloom.jev import ClassifiedNews, classify_with_fallback, headline_key
 from indiabloom.deals import deals_for, load_history as load_deals
 from indiabloom.export import EXPORTS_DIR, WATCHLIST_HEADERS, export_path, watchlist_rows, write_csv
 from indiabloom.fundamentals import fundamentals_rows, load_snapshot
@@ -891,17 +892,34 @@ class IndiaBloomApp(App):
             if not data:
                 self.query_one("#hint", Static).update("No linked stocks with price data.")
         elif view == "news":
+            classifications = {}
+            items = data
+            if isinstance(data, ClassifiedNews):
+                items = data.items
+                classifications = data.classifications
             table.add_column("TIME", key="time")
             table.add_column("SENT", key="sent")
+            if classifications:
+                table.add_column("JEV", key="jev")
+                table.add_column("CONF", key="conf")
             table.add_column("HEADLINE", key="headline")
             table.add_column("MENTIONS", key="mentions")
-            for item in data:  # type: ignore[attr-defined]
+            for item in items:  # type: ignore[union-attr]
                 when = item.published.strftime("%Y-%m-%d %H:%M") if item.published else "-"
+                classification = classifications.get(headline_key(item))
                 score = sentiment(item.title)
                 mentions = ", ".join(sorted(find_mentions(item.title, self.names))) or "-"
-                table.add_row(when, sentiment_label(score), item.title, mentions)
-            if not data:
+                row = [when, sentiment_label(score)]
+                if classifications:
+                    row.extend([f"{classification.sentiment}/{classification.relevance}",
+                                f"{classification.confidence:.2f}"] if classification else ["-", "-"])
+                row.extend([item.title, mentions])
+                table.add_row(*row)
+            if not items:
                 self.query_one("#hint", Static).update("No headlines found.")
+            elif classifications:
+                self.query_one("#hint", Static).update(
+                    "Jev result shown as sentiment/relevance. Confidence below 0.80 is review_required.")
 
     def _search_name(self, ticker: str) -> str | None:
         """Company name to search news for: our names file first, then the index list."""
@@ -931,7 +949,12 @@ class IndiaBloomApp(App):
             data = _error(f"no company name known for {ticker}")
         else:
             try:
-                data = self.services.news(f"{name} stock")
+                items = self.services.news(f"{name} stock")
+                if self.services.classifier is None:
+                    data = items
+                else:
+                    results = classify_with_fallback(items, self.services.classifier)
+                    data = ClassifiedNews(items, {r.headline_key: r for r in results})
             except Exception as exc:
                 data = _error(f"news failed: {exc}")
         self.call_from_thread(self._store_result, "news", ticker, data)
